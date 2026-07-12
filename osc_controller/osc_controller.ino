@@ -9,9 +9,12 @@ const char* password = "remotamente";
 const unsigned int localPort = 8000;   // UDP port to listen on
 WiFiUDP udp;
 
-// ---------- LED settings ----------
-const int ledPin = 2;
-const int ledcChannel = 0;
+// ---------- Output settings ----------
+const int ledPin = 2;     // onboard LED, used for debug/visual feedback
+const int dimmerPin = 15; // D15, goes to the DEWIN PWM dimmer module
+
+const int ledChannel = 0;
+const int dimmerChannel = 1;
 const int ledcFreq = 5000;
 const int ledcResolution = 8; // 0-255
 
@@ -22,12 +25,15 @@ void setup() {
   Serial.begin(115200);
   delay(500);
 
-  // Setup PWM on the LED pin (ESP32 core >= 3.x uses ledcAttach)
+  // Setup PWM on both output pins (ESP32 core >= 3.x uses ledcAttach)
   #if ESP_ARDUINO_VERSION_MAJOR >= 3
     ledcAttach(ledPin, ledcFreq, ledcResolution);
+    ledcAttach(dimmerPin, ledcFreq, ledcResolution);
   #else
-    ledcSetup(ledcChannel, ledcFreq, ledcResolution);
-    ledcAttachPin(ledPin, ledcChannel);
+    ledcSetup(ledChannel, ledcFreq, ledcResolution);
+    ledcAttachPin(ledPin, ledChannel);
+    ledcSetup(dimmerChannel, ledcFreq, ledcResolution);
+    ledcAttachPin(dimmerPin, dimmerChannel);
   #endif
 
   connectToWiFi();
@@ -91,8 +97,7 @@ void handleOSCPacket(const char* data, int len) {
 
   if (address == "/dimmer") {
     float value = 0.0f;
-     //Serial.print("recieved dimmer data: ");
-     //Serial.println(value);
+
     if (typeChar == 'f' && pos + 4 <= len) {
       value = readOSCFloat(data, pos);
     } else if (typeChar == 'i' && pos + 4 <= len) {
@@ -161,8 +166,10 @@ void setDimmer(float value) {
 
   #if ESP_ARDUINO_VERSION_MAJOR >= 3
     ledcWrite(ledPin, duty);
+    ledcWrite(dimmerPin, duty);
   #else
-    ledcWrite(ledcChannel, duty);
+    ledcWrite(ledChannel, duty);
+    ledcWrite(dimmerChannel, duty);
   #endif
 
   //Serial.printf("/dimmer -> %.3f (duty %d)\n", value, duty);
