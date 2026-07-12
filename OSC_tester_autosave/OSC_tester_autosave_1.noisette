@@ -351,7 +351,7 @@
                       "controlAddress": "/length"
                     },
                     {
-                      "value": 0.05999999865889549,
+                      "value": 0.8199999928474426,
                       "controlAddress": "/position"
                     },
                     {
@@ -380,49 +380,11 @@
                     {
                       "parameters": [
                         {
-                          "value": 0.3367469310760498,
+                          "value": 0.8030122518539429,
                           "controlAddress": "/position"
                         },
                         {
                           "value": 0.0,
-                          "controlAddress": "/value"
-                        },
-                        {
-                          "value": "Bezier",
-                          "controlAddress": "/easingType"
-                        }
-                      ],
-                      "niceName": "Key 1",
-                      "containers": {
-                        "easing": {
-                          "parameters": [
-                            {
-                              "value": [
-                                0.4021536409854889,
-                                0.0
-                              ],
-                              "controlAddress": "/anchor1"
-                            },
-                            {
-                              "value": [
-                                -1.346987962722778,
-                                0.04166668653488159
-                              ],
-                              "controlAddress": "/anchor2"
-                            }
-                          ]
-                        }
-                      },
-                      "type": "Key"
-                    },
-                    {
-                      "parameters": [
-                        {
-                          "value": 2.201807260513306,
-                          "controlAddress": "/position"
-                        },
-                        {
-                          "value": 1.0,
                           "controlAddress": "/value"
                         },
                         {
@@ -431,44 +393,6 @@
                         }
                       ],
                       "niceName": "Key",
-                      "containers": {
-                        "easing": {
-                          "parameters": [
-                            {
-                              "value": [
-                                1.346987962722778,
-                                -0.04166668653488159
-                              ],
-                              "controlAddress": "/anchor1"
-                            },
-                            {
-                              "value": [
-                                -0.2700452506542206,
-                                0.0
-                              ],
-                              "controlAddress": "/anchor2"
-                            }
-                          ]
-                        }
-                      },
-                      "type": "Key"
-                    },
-                    {
-                      "parameters": [
-                        {
-                          "value": 4.066867351531982,
-                          "controlAddress": "/position"
-                        },
-                        {
-                          "value": 0.0,
-                          "controlAddress": "/value"
-                        },
-                        {
-                          "value": "Bezier",
-                          "controlAddress": "/easingType"
-                        }
-                      ],
-                      "niceName": "Key 2",
                       "containers": {
                         "easing": {
                         }
