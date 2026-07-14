@@ -1,176 +1,244 @@
+// Camera slider - final firmware
+// - Connects to WiFi
+// - Listens for OSC over UDP: /slider (0.0-1.0 target position), /velocidad (seconds to reach it)
+// - Moves always use cubic ease-in-out
+// - On boot: auto-calibrates both limits via StallGuard, then centers. OSC is ignored until this finishes.
+// - Once calibrated, position is trusted from step counting. StallGuard is only used during
+//   calibration, not monitored during normal moves.
+//
+// Libraries needed (Library Manager):
+//   TMCStepper (Teemuatlut)
+//   OSC (CNMAT)
+//
+// ASSUMPTIONS MADE (adjust if wrong):
+//   - OSC addresses are "/slider" and "/velocidad" (with leading slash)
+//   - /slider argument is a float 0.0-1.0 (0 = one end, 1 = the other end)
+//   - /velocidad argument is a float, the number of SECONDS the move should take
+//     (it's stored and reused for the next /slider message; send it whenever you want to change speed)
+//   - UDP listen port is 9000
+//   - rms_current(800) is a placeholder, set to your motor's actual rated current in mA
+
 #include <WiFi.h>
 #include <WiFiUdp.h>
+#include <OSCMessage.h>
+#include <TMCStepper.h>
+#include <HardwareSerial.h>
 
-// ---------- WiFi credentials ----------
-const char* ssid     = "MANGO";
-const char* password = "remotamente";
+// ---------- Wiring ----------
+const int EN_PIN   = 27;
+const int DIR_PIN  = 25;
+const int STEP_PIN = 26;
+const int RX_PIN   = 32;
+const int TX_PIN   = 33;
+const int DIAG_PIN = 14;
 
-// ---------- OSC / UDP settings ----------
-const unsigned int localPort = 8000;   // UDP port to listen on
+#define DRIVER_ADDRESS 0b00
+#define R_SENSE        0.11f
+
+HardwareSerial driverSerial(1);
+TMC2209Stepper driver(&driverSerial, R_SENSE, DRIVER_ADDRESS);
+
+// ---------- WiFi / OSC ----------
+const char* WIFI_SSID = "MANGO";
+const char* WIFI_PASS = "remotamente";
+const unsigned int OSC_PORT = 9000;
 WiFiUDP udp;
 
-// ---------- Output settings ----------
-const int ledPin = 2;     // onboard LED, used for debug/visual feedback
-const int dimmerPin = 15; // D15, goes to the DEWIN PWM dimmer module
+// ---------- Motion parameters ----------
+const int CAL_STEP_DELAY_US = 1200;  // slow, safe speed used only during calibration
+const int STEP_PULSE_US     = 3;     // step pulse width during normal moves
+const int BACKOFF_STEPS     = 200;   // steps to back off from each limit after detecting it
+const int STALL_DEBOUNCE    = 30;    // consecutive HIGH DIAG reads required to trust a stall
 
-const int ledChannel = 0;
-const int dimmerChannel = 1;
-const int ledcFreq = 5000;
-const int ledcResolution = 8; // 0-255
+// ---------- State ----------
+long minSteps = 0;
+long maxSteps = 0;
+long currentSteps = 0;
+bool calibrated = false;
 
-// buffer for incoming packets
-char packetBuffer[512];
+bool moving = false;
+long moveStartPos = 0;
+long moveTargetPos = 0;
+unsigned long moveStartTime = 0;
+unsigned long moveDurationMs = 3000;
 
+float lastVelocidadSec = 3.0; // default move duration until /velocidad is received
+
+// ---------- Easing ----------
+float easeInOutCubic(float t) {
+  if (t < 0.5f) return 4.0f * t * t * t;
+  float f = -2.0f * t + 2.0f;
+  return 1.0f - (f * f * f) / 2.0f;
+}
+
+// ---------- Low-level step helpers ----------
+void stepOnce(bool forward) {
+  digitalWrite(DIR_PIN, forward ? HIGH : LOW);
+  digitalWrite(STEP_PIN, HIGH);
+  delayMicroseconds(STEP_PULSE_US);
+  digitalWrite(STEP_PIN, LOW);
+  delayMicroseconds(STEP_PULSE_US);
+}
+
+void stepOnceSlow(bool forward) {
+  digitalWrite(DIR_PIN, forward ? HIGH : LOW);
+  digitalWrite(STEP_PIN, HIGH);
+  delayMicroseconds(CAL_STEP_DELAY_US);
+  digitalWrite(STEP_PIN, LOW);
+  delayMicroseconds(CAL_STEP_DELAY_US);
+}
+
+bool stalledDebounced() {
+  static int streak = 0;
+  if (digitalRead(DIAG_PIN) == HIGH) {
+    streak++;
+  } else {
+    streak = 0;
+  }
+  if (streak >= STALL_DEBOUNCE) {
+    streak = 0;
+    return true;
+  }
+  return false;
+}
+
+// ---------- Calibration ----------
+void calibrate() {
+  Serial.println("Calibrating: searching for limit A...");
+  while (!stalledDebounced()) {
+    stepOnceSlow(false); // toward limit A
+  }
+  Serial.println("Limit A found, backing off...");
+  for (int i = 0; i < BACKOFF_STEPS; i++) stepOnceSlow(true);
+  currentSteps = 0;
+  minSteps = 0;
+
+  Serial.println("Searching for limit B...");
+  long traveled = 0;
+  while (!stalledDebounced()) {
+    stepOnceSlow(true); // toward limit B
+    traveled++;
+  }
+  Serial.println("Limit B found, backing off...");
+  for (int i = 0; i < BACKOFF_STEPS; i++) stepOnceSlow(false);
+  maxSteps = traveled - BACKOFF_STEPS;
+  currentSteps = maxSteps;
+
+  calibrated = true;
+  Serial.print("Calibration done. Range (steps): ");
+  Serial.println(maxSteps);
+
+  Serial.println("Moving to center...");
+  long center = maxSteps / 2;
+  bool forward = center > currentSteps;
+  while (currentSteps != center) {
+    stepOnceSlow(forward);
+    currentSteps += forward ? 1 : -1;
+  }
+  Serial.println("Centered. Ready for OSC.");
+}
+
+// ---------- OSC callbacks ----------
+void sliderCallback(OSCMessage &msg) {
+  if (!calibrated) return; // safety: ignore until calibration is done
+  float norm = msg.getFloat(0);
+  if (norm < 0.0f) norm = 0.0f;
+  if (norm > 1.0f) norm = 1.0f;
+
+  moveStartPos = currentSteps;
+  moveTargetPos = (long)round(norm * maxSteps);
+  moveStartTime = millis();
+  moveDurationMs = (unsigned long)(lastVelocidadSec * 1000.0f);
+  if (moveDurationMs < 50) moveDurationMs = 50; // avoid a zero/near-zero duration
+  moving = true;
+
+  Serial.print("New target: ");
+  Serial.print(norm);
+  Serial.print("  duration(ms): ");
+  Serial.println(moveDurationMs);
+}
+
+void velocidadCallback(OSCMessage &msg) {
+  float v = msg.getFloat(0);
+  if (v > 0.0f) {
+    lastVelocidadSec = v;
+    Serial.print("New duration set (s): ");
+    Serial.println(v);
+  }
+}
+
+// ---------- Setup ----------
 void setup() {
   Serial.begin(115200);
-  delay(500);
 
-  // Setup PWM on both output pins (ESP32 core >= 3.x uses ledcAttach)
-  #if ESP_ARDUINO_VERSION_MAJOR >= 3
-    ledcAttach(ledPin, ledcFreq, ledcResolution);
-    ledcAttach(dimmerPin, ledcFreq, ledcResolution);
-  #else
-    ledcSetup(ledChannel, ledcFreq, ledcResolution);
-    ledcAttachPin(ledPin, ledChannel);
-    ledcSetup(dimmerChannel, ledcFreq, ledcResolution);
-    ledcAttachPin(dimmerPin, dimmerChannel);
-  #endif
+  pinMode(EN_PIN, OUTPUT);
+  pinMode(DIR_PIN, OUTPUT);
+  pinMode(STEP_PIN, OUTPUT);
+  pinMode(DIAG_PIN, INPUT);
+  digitalWrite(EN_PIN, LOW);
 
-  connectToWiFi();
+  driverSerial.begin(115200, SERIAL_8N1, RX_PIN, TX_PIN);
+  driver.begin();
+  Serial.print("Driver version: ");
+  Serial.println(driver.version());
+  driver.toff(4);
+  driver.rms_current(800); // set to your motor's rated current (mA)
+  driver.microsteps(8);
+  driver.pwm_autoscale(true);
+  driver.TCOOLTHRS(0xFFFFF);
+  driver.SGTHRS(60); // tuned from earlier testing, adjust if needed
 
-  udp.begin(localPort);
-  Serial.printf("Listening for OSC on UDP port %u\n", localPort);
-}
+  // Calibrate BEFORE touching WiFi/OSC, so nothing can be received or processed during it
+  calibrate();
 
-void loop() {
-  int packetSize = udp.parsePacket();
-  if (packetSize > 0 && packetSize < (int)sizeof(packetBuffer)) {
-    int len = udp.read(packetBuffer, sizeof(packetBuffer) - 1);
-    if (len > 0) {
-      packetBuffer[len] = 0;
-      handleOSCPacket(packetBuffer, len);
-    }
-  }
-
-  // basic reconnect handling
-  if (WiFi.status() != WL_CONNECTED) {
-    connectToWiFi();
-  }
-}
-
-void connectToWiFi() {
-  Serial.printf("Connecting to WiFi '%s'...\n", ssid);
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(ssid, password);
-
-  unsigned long start = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - start < 20000) {
-    delay(250);
+  // Now connect WiFi and start listening
+  Serial.print("Connecting to WiFi");
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(300);
     Serial.print(".");
   }
   Serial.println();
+  Serial.print("Connected. IP: ");
+  Serial.println(WiFi.localIP());
 
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.print("Connected. IP address: ");
-    Serial.println(WiFi.localIP());
-  } else {
-    Serial.println("WiFi connection failed, will retry in loop().");
-  }
+  udp.begin(OSC_PORT);
+  Serial.print("Listening for OSC on port ");
+  Serial.println(OSC_PORT);
 }
 
-// ---------- Minimal OSC parsing ----------
-// Reads an OSC address pattern + type tag string + one numeric argument
-// (int32 or float32), which covers most controllers (TouchOSC, Max, etc.)
+// ---------- Main loop ----------
+void loop() {
+  // --- read incoming OSC ---
+  int packetSize = udp.parsePacket();
+  if (packetSize > 0) {
+    OSCMessage msg;
+    while (packetSize--) {
+      msg.fill(udp.read());
+    }
+    if (!msg.hasError()) {
+      msg.dispatch("/slider", sliderCallback);
+      msg.dispatch("/velocidad", velocidadCallback);
+    }
+  }
 
-void handleOSCPacket(const char* data, int len) {
-  int pos = 0;
+  // --- advance any ongoing move, cubic-eased ---
+  if (moving) {
+    unsigned long elapsed = millis() - moveStartTime;
+    float t = (float)elapsed / (float)moveDurationMs;
+    if (t > 1.0f) t = 1.0f;
+    float eased = easeInOutCubic(t);
+    long desired = moveStartPos + (long)round((moveTargetPos - moveStartPos) * eased);
 
-  // 1. Read address pattern (null-terminated, padded to 4 bytes)
-  String address = readOSCString(data, len, pos);
-  if (address.length() == 0) return;
-
-  // 2. Read type tag string, e.g. ",f" or ",i"
-  String typeTags = readOSCString(data, len, pos);
-  if (typeTags.length() < 2 || typeTags[0] != ',') return;
-
-  char typeChar = typeTags[1];
-
-  if (address == "/dimmer") {
-    float value = 0.0f;
-
-    if (typeChar == 'f' && pos + 4 <= len) {
-      value = readOSCFloat(data, pos);
-    } else if (typeChar == 'i' && pos + 4 <= len) {
-      value = (float)readOSCInt(data, pos);
-    } else {
-      Serial.println("Unsupported /dimmer argument type");
-      return;
+    if (desired != currentSteps) {
+      bool forward = desired > currentSteps;
+      stepOnce(forward);
+      currentSteps += forward ? 1 : -1;
     }
 
-    setDimmer(value);
+    if (t >= 1.0f && desired == currentSteps) {
+      moving = false;
+      Serial.println("Move complete.");
+    }
   }
-}
-
-// Reads a null-terminated OSC string, advances pos past its 4-byte padding
-String readOSCString(const char* data, int len, int &pos) {
-  int start = pos;
-  while (pos < len && data[pos] != '\0') pos++;
-  if (pos >= len) return String();
-
-  String result(data + start, pos - start);
-
-  // consume the null terminator plus padding to next multiple of 4
-  pos++; // skip null
-  while (pos % 4 != 0) pos++;
-
-  return result;
-}
-
-float readOSCFloat(const char* data, int &pos) {
-  uint32_t raw =
-    ((uint32_t)(uint8_t)data[pos]     << 24) |
-    ((uint32_t)(uint8_t)data[pos + 1] << 16) |
-    ((uint32_t)(uint8_t)data[pos + 2] << 8)  |
-    ((uint32_t)(uint8_t)data[pos + 3]);
-  pos += 4;
-
-  float value;
-  memcpy(&value, &raw, sizeof(value));
-  return value;
-}
-
-int32_t readOSCInt(const char* data, int &pos) {
-  int32_t value =
-    ((int32_t)(uint8_t)data[pos]     << 24) |
-    ((int32_t)(uint8_t)data[pos + 1] << 16) |
-    ((int32_t)(uint8_t)data[pos + 2] << 8)  |
-    ((int32_t)(uint8_t)data[pos + 3]);
-  pos += 4;
-  return value;
-}
-
-// ---------- LED control ----------
-// Accepts either 0.0-1.0 (typical OSC float range) or 0-255 (int) and
-// scales accordingly.
-
-void setDimmer(float value) {
-  int duty;
-
-  if (value <= 1.0f && value >= 0.0f) {
-    duty = (int)(value * 255.0f);
-  } else {
-    duty = (int)value;
-  }
-
-  duty = constrain(duty, 0, 255);
-
-  #if ESP_ARDUINO_VERSION_MAJOR >= 3
-    ledcWrite(ledPin, duty);
-    ledcWrite(dimmerPin, duty);
-  #else
-    ledcWrite(ledChannel, duty);
-    ledcWrite(dimmerChannel, duty);
-  #endif
-
-  //Serial.printf("/dimmer -> %.3f (duty %d)\n", value, duty);
 }

@@ -202,7 +202,7 @@
                       "controlAddress": "/remoteHost"
                     },
                     {
-                      "value": 8000,
+                      "value": 9000,
                       "hexMode": false,
                       "controlAddress": "/remotePort"
                     }
@@ -723,6 +723,30 @@
                   ],
                   "hideInEditor": true,
                   "hideInRemoteControl": false,
+                  "items": [
+                    {
+                      "parameters": [
+                        {
+                          "value": 1.094427585601807,
+                          "controlAddress": "/position"
+                        },
+                        {
+                          "value": 0.5833333730697632,
+                          "controlAddress": "/value"
+                        },
+                        {
+                          "value": "Bezier",
+                          "controlAddress": "/easingType"
+                        }
+                      ],
+                      "niceName": "Key",
+                      "containers": {
+                        "easing": {
+                        }
+                      },
+                      "type": "Key"
+                    }
+                  ],
                   "viewOffset": [
                     0,
                     0
@@ -800,14 +824,14 @@
                               {
                                 "parameters": [
                                   {
-                                    "value": 0.0,
+                                    "value": 0.5833333730697632,
                                     "controlAddress": "/#1"
                                   }
                                 ],
                                 "niceName": "#1",
                                 "type": "Float",
                                 "param": {
-                                  "value": 0.0,
+                                  "value": 0.5833333730697632,
                                   "controlAddress": "/sequences/sequence/layers/slider/mapping/outputs/mappingOutput/command/arguments/#1/#1"
                                 },
                                 "paramLink": {
@@ -873,6 +897,30 @@
                   ],
                   "hideInEditor": true,
                   "hideInRemoteControl": false,
+                  "items": [
+                    {
+                      "parameters": [
+                        {
+                          "value": 1.14623498916626,
+                          "controlAddress": "/position"
+                        },
+                        {
+                          "value": 1.0,
+                          "controlAddress": "/value"
+                        },
+                        {
+                          "value": "Bezier",
+                          "controlAddress": "/easingType"
+                        }
+                      ],
+                      "niceName": "Key",
+                      "containers": {
+                        "easing": {
+                        }
+                      },
+                      "type": "Key"
+                    }
+                  ],
                   "viewOffset": [
                     0,
                     0
@@ -950,14 +998,14 @@
                               {
                                 "parameters": [
                                   {
-                                    "value": 0.0,
+                                    "value": 1.0,
                                     "controlAddress": "/#1"
                                   }
                                 ],
                                 "niceName": "#1",
                                 "type": "Float",
                                 "param": {
-                                  "value": 0.0,
+                                  "value": 1.0,
                                   "controlAddress": "/sequences/sequence/layers/velocidad/mapping/outputs/mappingOutput/command/arguments/#1/#1"
                                 },
                                 "paramLink": {
