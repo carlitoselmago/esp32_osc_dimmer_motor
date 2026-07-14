@@ -1,9 +1,10 @@
-// Camera slider - final firmware
+// Camera slider + dimmer - final firmware
 // - Connects to WiFi
-// - Listens for OSC over UDP: /slider (0.0-1.0 target position), /velocidad (seconds to reach it)
-// - Moves always use cubic ease-in-out
+// - Listens for OSC over UDP: /slider (0.0-1.0 target position), /velocidad (seconds to reach it),
+//   /dimmer (0.0-1.0 or 0-255 brightness for the LED/dimmer output)
+// - Slider moves always use cubic ease-in-out
 // - On boot: auto-calibrates both limits via StallGuard, then centers. OSC is ignored until this finishes.
-// - Once calibrated, position is trusted from step counting. StallGuard is only used during
+// - Once calibrated, slider position is trusted from step counting. StallGuard is only used during
 //   calibration, not monitored during normal moves.
 //
 // Libraries needed (Library Manager):
@@ -11,11 +12,12 @@
 //   OSC (CNMAT)
 //
 // ASSUMPTIONS MADE (adjust if wrong):
-//   - OSC addresses are "/slider" and "/velocidad" (with leading slash)
+//   - OSC addresses are "/slider", "/velocidad", "/dimmer" (with leading slash)
 //   - /slider argument is a float 0.0-1.0 (0 = one end, 1 = the other end)
 //   - /velocidad argument is a float, the number of SECONDS the move should take
 //     (it's stored and reused for the next /slider message; send it whenever you want to change speed)
-//   - UDP listen port is 9000
+//   - /dimmer argument is a float 0.0-1.0 or an int 0-255, either is accepted
+//   - UDP listen port is 9000 for everything (unified from the two sketches, dimmer used to be 8000)
 //   - rms_current(800) is a placeholder, set to your motor's actual rated current in mA
 
 #include <WiFi.h>
@@ -37,6 +39,14 @@ const int DIAG_PIN = 14;
 
 HardwareSerial driverSerial(1);
 TMC2209Stepper driver(&driverSerial, R_SENSE, DRIVER_ADDRESS);
+
+// ---------- Dimmer output ----------
+const int ledPin = 2;      // onboard LED, debug/visual feedback
+const int dimmerPin = 15;  // D15 -> DEWIN PWM dimmer module
+const int ledChannel = 0;
+const int dimmerChannel = 1;
+const int ledcFreq = 5000;
+const int ledcResolution = 8; // 0-255
 
 // ---------- WiFi / OSC ----------
 const char* WIFI_SSID = "MANGO";
@@ -167,9 +177,51 @@ void velocidadCallback(OSCMessage &msg) {
   }
 }
 
+void dimmerCallback(OSCMessage &msg) {
+  float value;
+  if (msg.isFloat(0)) {
+    value = msg.getFloat(0);
+  } else if (msg.isInt(0)) {
+    value = (float)msg.getInt(0);
+  } else {
+    Serial.println("Unsupported /dimmer argument type");
+    return;
+  }
+  setDimmer(value);
+}
+
+// Accepts either 0.0-1.0 (typical OSC float range) or 0-255 (int) and scales accordingly.
+void setDimmer(float value) {
+  int duty;
+  if (value <= 1.0f && value >= 0.0f) {
+    duty = (int)(value * 255.0f);
+  } else {
+    duty = (int)value;
+  }
+  duty = constrain(duty, 0, 255);
+
+  #if ESP_ARDUINO_VERSION_MAJOR >= 3
+    ledcWrite(ledPin, duty);
+    ledcWrite(dimmerPin, duty);
+  #else
+    ledcWrite(ledChannel, duty);
+    ledcWrite(dimmerChannel, duty);
+  #endif
+}
+
 // ---------- Setup ----------
 void setup() {
   Serial.begin(115200);
+
+  #if ESP_ARDUINO_VERSION_MAJOR >= 3
+    ledcAttach(ledPin, ledcFreq, ledcResolution);
+    ledcAttach(dimmerPin, ledcFreq, ledcResolution);
+  #else
+    ledcSetup(ledChannel, ledcFreq, ledcResolution);
+    ledcAttachPin(ledPin, ledChannel);
+    ledcSetup(dimmerChannel, ledcFreq, ledcResolution);
+    ledcAttachPin(dimmerPin, dimmerChannel);
+  #endif
 
   pinMode(EN_PIN, OUTPUT);
   pinMode(DIR_PIN, OUTPUT);
@@ -219,6 +271,7 @@ void loop() {
     if (!msg.hasError()) {
       msg.dispatch("/slider", sliderCallback);
       msg.dispatch("/velocidad", velocidadCallback);
+      msg.dispatch("/dimmer", dimmerCallback);
     }
   }
 
