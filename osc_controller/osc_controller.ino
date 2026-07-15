@@ -55,9 +55,9 @@ const unsigned int OSC_PORT = 9000;
 WiFiUDP udp;
 
 // OSC addresses - edit these if you want to rename them, used below in loop()
-char oscAddressSlider[32]    = "/slider";
-char oscAddressVelocidad[32] = "/velocidad";
-char oscAddressDimmer[32]    = "/dimmer";
+char oscAddressSlider[32]    = "/slider1";
+char oscAddressVelocidad[32] = "/velocidad1";
+char oscAddressDimmer[32]    = "/dimmer1";
 
 // ---------- Motion parameters ----------
 const int CAL_STEP_DELAY_US = 1200;  // slow, safe speed used only during calibration
@@ -77,6 +77,8 @@ long moveTargetPos = 0;
 unsigned long moveStartTime = 0;
 unsigned long moveDurationMs = 3000;
 
+const float MIN_VELOCIDAD_SEC = 1.0f;  // fastest allowed transition
+const float MAX_VELOCIDAD_SEC = 10.0f; // slowest allowed transition
 float lastVelocidadSec = 3.0; // default move duration until /velocidad is received
 
 // ---------- Easing ----------
@@ -164,7 +166,7 @@ void sliderCallback(OSCMessage &msg) {
   moveTargetPos = (long)round(norm * maxSteps);
   moveStartTime = millis();
   moveDurationMs = (unsigned long)(lastVelocidadSec * 1000.0f);
-  if (moveDurationMs < 50) moveDurationMs = 50; // avoid a zero/near-zero duration
+  moveDurationMs = constrain(moveDurationMs, (unsigned long)(MIN_VELOCIDAD_SEC * 1000.0f), (unsigned long)(MAX_VELOCIDAD_SEC * 1000.0f));
   moving = true;
 
   Serial.print("New target: ");
@@ -175,11 +177,10 @@ void sliderCallback(OSCMessage &msg) {
 
 void velocidadCallback(OSCMessage &msg) {
   float v = msg.getFloat(0);
-  if (v > 0.0f) {
-    lastVelocidadSec = v;
-    Serial.print("New duration set (s): ");
-    Serial.println(v);
-  }
+  v = constrain(v, MIN_VELOCIDAD_SEC, MAX_VELOCIDAD_SEC); // clamp to allowed speed range
+  lastVelocidadSec = v;
+  Serial.print("New duration set (s): ");
+  Serial.println(v);
 }
 
 void dimmerCallback(OSCMessage &msg) {
