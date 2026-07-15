@@ -54,6 +54,11 @@ const char* WIFI_PASS = "remotamente";
 const unsigned int OSC_PORT = 9000;
 WiFiUDP udp;
 
+// OSC addresses - edit these if you want to rename them, used below in loop()
+char oscAddressSlider[32]    = "/slider";
+char oscAddressVelocidad[32] = "/velocidad";
+char oscAddressDimmer[32]    = "/dimmer";
+
 // ---------- Motion parameters ----------
 const int CAL_STEP_DELAY_US = 1200;  // slow, safe speed used only during calibration
 const int STEP_PULSE_US     = 3;     // step pulse width during normal moves
@@ -269,9 +274,9 @@ void loop() {
       msg.fill(udp.read());
     }
     if (!msg.hasError()) {
-      msg.dispatch("/slider", sliderCallback);
-      msg.dispatch("/velocidad", velocidadCallback);
-      msg.dispatch("/dimmer", dimmerCallback);
+      msg.dispatch(oscAddressSlider, sliderCallback);
+      msg.dispatch(oscAddressVelocidad, velocidadCallback);
+      msg.dispatch(oscAddressDimmer, dimmerCallback);
     }
   }
 
