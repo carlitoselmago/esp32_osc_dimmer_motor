@@ -60,7 +60,7 @@ char oscAddressVelocidad[32] = "/velocidad2";
 char oscAddressDimmer[32]    = "/dimmer2";
 
 // ---------- Motion parameters ----------
-const int CAL_STEP_DELAY_US = 1200;  // slow, safe speed used only during calibration
+const int CAL_STEP_DELAY_US = 800;  // slow, safe speed used only during calibration
 const int STEP_PULSE_US     = 3;     // step pulse width during normal moves
 const int BACKOFF_STEPS     = 200;   // steps to back off from each limit after detecting it
 const int STALL_DEBOUNCE    = 30;    // consecutive HIGH DIAG reads required to trust a stall
@@ -77,9 +77,9 @@ long moveTargetPos = 0;
 unsigned long moveStartTime = 0;
 unsigned long moveDurationMs = 3000;
 
-const float MIN_VELOCIDAD_SEC = 1.0f;  // fastest allowed transition
-const float MAX_VELOCIDAD_SEC = 10.0f; // slowest allowed transition
-float lastVelocidadSec = 3.0; // default move duration until /velocidad is received
+const float MIN_VELOCIDAD_SEC = 10.0f;  // fastest allowed transition
+const float MAX_VELOCIDAD_SEC = 100.0f; // slowest allowed transition
+float lastVelocidadSec = 10.0; // default move duration until /velocidad is received
 
 // ---------- Easing ----------
 float easeInOutCubic(float t) {
@@ -240,7 +240,7 @@ void setup() {
   Serial.print("Driver version: ");
   Serial.println(driver.version());
   driver.toff(4);
-  driver.rms_current(800); // set to your motor's rated current (mA)
+  driver.rms_current(1000); //800 set to your motor's rated current (mA)
   driver.microsteps(8);
   driver.pwm_autoscale(true);
   driver.TCOOLTHRS(0xFFFFF);
