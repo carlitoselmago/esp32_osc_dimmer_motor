@@ -46,7 +46,11 @@ const int dimmerPin = 15;  // D15 -> DEWIN PWM dimmer module
 const int ledChannel = 0;
 const int dimmerChannel = 1;
 const int ledcFreq = 5000;
+const int dimmerLedcFreq = 200;   // dentro del rango 1-500Hz del YYAC-3S
 const int ledcResolution = 8; // 0-255
+
+const int DIM_MIN = 130;  // rough guess for where variation starts to matter — tune this
+const int DIM_MAX = 255;  // already confirmed max
 
 // ---------- WiFi / OSC ----------
 const char* WIFI_SSID = "MANGO";
@@ -63,7 +67,7 @@ char oscAddressDimmer[32]    = "/dimmer2";
 const int CAL_STEP_DELAY_US = 800;  // slow, safe speed used only during calibration
 const int STEP_PULSE_US     = 3;     // step pulse width during normal moves
 const int BACKOFF_STEPS     = 200;   // steps to back off from each limit after detecting it
-const int STALL_DEBOUNCE    = 30;    // consecutive HIGH DIAG reads required to trust a stall
+const int STALL_DEBOUNCE    = 20;    // consecutive HIGH DIAG reads required to trust a stall (how many signals of stall to call stall, initial value 30)
 
 // ---------- State ----------
 long minSteps = 0;
@@ -81,11 +85,18 @@ const float MIN_VELOCIDAD_SEC = 10.0f;  // fastest allowed transition
 const float MAX_VELOCIDAD_SEC = 100.0f; // slowest allowed transition
 float lastVelocidadSec = 10.0; // default move duration until /velocidad is received
 
+
 // ---------- Easing ----------
+const float EASE_MIX = 0.5f; // 1.0 = full cubic ease, 0.0 = pure linear (no easing)
+
 float easeInOutCubic(float t) {
-  if (t < 0.5f) return 4.0f * t * t * t;
-  float f = -2.0f * t + 2.0f;
-  return 1.0f - (f * f * f) / 2.0f;
+  float eased;
+  if (t < 0.5f) eased = 4.0f * t * t * t;
+  else {
+    float f = -2.0f * t + 2.0f;
+    eased = 1.0f - (f * f * f) / 2.0f;
+  }
+  return EASE_MIX * eased + (1.0f - EASE_MIX) * t;
 }
 
 // ---------- Low-level step helpers ----------
@@ -176,13 +187,22 @@ void sliderCallback(OSCMessage &msg) {
 }
 
 void velocidadCallback(OSCMessage &msg) {
-  float v = msg.getFloat(0);
-  v = constrain(v, MIN_VELOCIDAD_SEC, MAX_VELOCIDAD_SEC); // clamp to allowed speed range
+  float raw;
+  if (msg.isFloat(0)) {
+    raw = msg.getFloat(0);
+  } else if (msg.isInt(0)) {
+    raw = (float)msg.getInt(0);
+  } else {
+    Serial.println("Unsupported /velocidad2 argument type");
+    return;
+  }
+  raw = constrain(raw, 0.0f, 1.0f);
+
+  float v = MIN_VELOCIDAD_SEC + raw * (MAX_VELOCIDAD_SEC - MIN_VELOCIDAD_SEC);
   lastVelocidadSec = v;
   Serial.print("New duration set (s): ");
   Serial.println(v);
 }
-
 void dimmerCallback(OSCMessage &msg) {
   float value;
   if (msg.isFloat(0)) {
@@ -193,18 +213,31 @@ void dimmerCallback(OSCMessage &msg) {
     Serial.println("Unsupported /dimmer argument type");
     return;
   }
+
+  Serial.print("dimmer raw: ");
+  Serial.print(value, 4);
+  Serial.print("  isFloat: ");
+  Serial.print(msg.isFloat(0));
+  Serial.print("  isInt: ");
+  Serial.println(msg.isInt(0));
+
   setDimmer(value);
 }
 
-// Accepts either 0.0-1.0 (typical OSC float range) or 0-255 (int) and scales accordingly.
+
 void setDimmer(float value) {
-  int duty;
+  float norm;
   if (value <= 1.0f && value >= 0.0f) {
-    duty = (int)(value * 255.0f);
+    norm = value;
   } else {
-    duty = (int)value;
+    norm = constrain(value, 0.0f, 255.0f) / 255.0f;
   }
+
+  int duty = DIM_MIN + (int)(norm * (DIM_MAX - DIM_MIN));
   duty = constrain(duty, 0, 255);
+
+  Serial.print("dimmer duty: ");
+  Serial.println(duty);
 
   #if ESP_ARDUINO_VERSION_MAJOR >= 3
     ledcWrite(ledPin, duty);
@@ -215,19 +248,24 @@ void setDimmer(float value) {
   #endif
 }
 
+
+
 // ---------- Setup ----------
 void setup() {
+
+
+
   Serial.begin(115200);
 
-  #if ESP_ARDUINO_VERSION_MAJOR >= 3
-    ledcAttach(ledPin, ledcFreq, ledcResolution);
-    ledcAttach(dimmerPin, ledcFreq, ledcResolution);
-  #else
-    ledcSetup(ledChannel, ledcFreq, ledcResolution);
-    ledcAttachPin(ledPin, ledChannel);
-    ledcSetup(dimmerChannel, ledcFreq, ledcResolution);
-    ledcAttachPin(dimmerPin, dimmerChannel);
-  #endif
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  ledcAttach(ledPin, ledcFreq, ledcResolution);
+  ledcAttach(dimmerPin, dimmerLedcFreq, ledcResolution);
+#else
+  ledcSetup(ledChannel, ledcFreq, ledcResolution);
+  ledcAttachPin(ledPin, ledChannel);
+  ledcSetup(dimmerChannel, dimmerLedcFreq, ledcResolution);
+  ledcAttachPin(dimmerPin, dimmerChannel);
+#endif
 
   pinMode(EN_PIN, OUTPUT);
   pinMode(DIR_PIN, OUTPUT);
@@ -244,7 +282,7 @@ void setup() {
   driver.microsteps(8);
   driver.pwm_autoscale(true);
   driver.TCOOLTHRS(0xFFFFF);
-  driver.SGTHRS(60); // tuned from earlier testing, adjust if needed
+  driver.SGTHRS(80); // controlls sensitivity of the stallguard, the higher the more sensitive, initial value was 60
 
   // Calibrate BEFORE touching WiFi/OSC, so nothing can be received or processed during it
   calibrate();
