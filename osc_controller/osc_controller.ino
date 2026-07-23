@@ -55,9 +55,9 @@ const unsigned int OSC_PORT = 9000;
 WiFiUDP udp;
 
 // OSC addresses - edit these if you want to rename them, used below in loop()
-char oscAddressSlider[32]    = "/slider1";
-char oscAddressVelocidad[32] = "/velocidad1";
-char oscAddressDimmer[32]    = "/dimmer1";
+char oscAddressSlider[32]    = "/slider2";
+char oscAddressVelocidad[32] = "/velocidad2";
+char oscAddressDimmer[32]    = "/dimmer2";
 
 // ---------- Motion parameters ----------
 const int CAL_STEP_DELAY_US = 1200;  // slow, safe speed used only during calibration
