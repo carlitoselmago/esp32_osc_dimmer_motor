@@ -27,15 +27,15 @@
 #include <HardwareSerial.h>
 
 // ---------- Wiring ----------
-const int EN_PIN   = 27;
-const int DIR_PIN  = 25;
+const int EN_PIN = 27;
+const int DIR_PIN = 25;
 const int STEP_PIN = 26;
-const int RX_PIN   = 32;
-const int TX_PIN   = 33;
+const int RX_PIN = 32;
+const int TX_PIN = 33;
 const int DIAG_PIN = 14;
 
 #define DRIVER_ADDRESS 0b00
-#define R_SENSE        0.11f
+#define R_SENSE 0.11f
 
 HardwareSerial driverSerial(1);
 TMC2209Stepper driver(&driverSerial, R_SENSE, DRIVER_ADDRESS);
@@ -46,28 +46,28 @@ const int dimmerPin = 15;  // D15 -> DEWIN PWM dimmer module
 const int ledChannel = 0;
 const int dimmerChannel = 1;
 const int ledcFreq = 5000;
-const int dimmerLedcFreq = 200;   // dentro del rango 1-500Hz del YYAC-3S
-const int ledcResolution = 8; // 0-255
+const int dimmerLedcFreq = 200;  // dentro del rango 1-500Hz del YYAC-3S
+const int ledcResolution = 8;    // 0-255
 
 const int DIM_MIN = 130;  // rough guess for where variation starts to matter — tune this
 const int DIM_MAX = 255;  // already confirmed max
 
 // ---------- WiFi / OSC ----------
-const char* WIFI_SSID = "MANGO";
-const char* WIFI_PASS = "remotamente";
+const char *WIFI_SSID = "MANGO";
+const char *WIFI_PASS = "remotamente";
 const unsigned int OSC_PORT = 9000;
 WiFiUDP udp;
 
 // OSC addresses - edit these if you want to rename them, used below in loop()
-char oscAddressSlider[32]    = "/slider2";
+char oscAddressSlider[32] = "/slider2";
 char oscAddressVelocidad[32] = "/velocidad2";
-char oscAddressDimmer[32]    = "/dimmer2";
+char oscAddressDimmer[32] = "/dimmer2";
 
 // ---------- Motion parameters ----------
 const int CAL_STEP_DELAY_US = 800;  // slow, safe speed used only during calibration
-const int STEP_PULSE_US     = 3;     // step pulse width during normal moves
-const int BACKOFF_STEPS     = 200;   // steps to back off from each limit after detecting it
-const int STALL_DEBOUNCE    = 20;    // consecutive HIGH DIAG reads required to trust a stall (how many signals of stall to call stall, initial value 30)
+const int STEP_PULSE_US = 3;        // step pulse width during normal moves
+const int BACKOFF_STEPS = 200;      // steps to back off from each limit after detecting it
+const int STALL_DEBOUNCE = 20;      // consecutive HIGH DIAG reads required to trust a stall (how many signals of stall to call stall, initial value 30)
 
 // ---------- State ----------
 long minSteps = 0;
@@ -81,13 +81,13 @@ long moveTargetPos = 0;
 unsigned long moveStartTime = 0;
 unsigned long moveDurationMs = 3000;
 
-const float MIN_VELOCIDAD_SEC = 10.0f;  // fastest allowed transition
-const float MAX_VELOCIDAD_SEC = 100.0f; // slowest allowed transition
-float lastVelocidadSec = 10.0; // default move duration until /velocidad is received
+const float MIN_VELOCIDAD_SEC = 10.0f;   // fastest allowed transition
+const float MAX_VELOCIDAD_SEC = 100.0f;  // slowest allowed transition
+float lastVelocidadSec = 10.0;           // default move duration until /velocidad is received
 
 
 // ---------- Easing ----------
-const float EASE_MIX = 0.5f; // 1.0 = full cubic ease, 0.0 = pure linear (no easing)
+const float EASE_MIX = 0.5f;  // 1.0 = full cubic ease, 0.0 = pure linear (no easing)
 
 float easeInOutCubic(float t) {
   float eased;
@@ -134,7 +134,7 @@ bool stalledDebounced() {
 void calibrate() {
   Serial.println("Calibrating: searching for limit A...");
   while (!stalledDebounced()) {
-    stepOnceSlow(false); // toward limit A
+    stepOnceSlow(false);  // toward limit A
   }
   Serial.println("Limit A found, backing off...");
   for (int i = 0; i < BACKOFF_STEPS; i++) stepOnceSlow(true);
@@ -144,7 +144,7 @@ void calibrate() {
   Serial.println("Searching for limit B...");
   long traveled = 0;
   while (!stalledDebounced()) {
-    stepOnceSlow(true); // toward limit B
+    stepOnceSlow(true);  // toward limit B
     traveled++;
   }
   Serial.println("Limit B found, backing off...");
@@ -168,7 +168,7 @@ void calibrate() {
 
 // ---------- OSC callbacks ----------
 void sliderCallback(OSCMessage &msg) {
-  if (!calibrated) return; // safety: ignore until calibration is done
+  if (!calibrated) return;  // safety: ignore until calibration is done
   float norm = msg.getFloat(0);
   if (norm < 0.0f) norm = 0.0f;
   if (norm > 1.0f) norm = 1.0f;
@@ -239,13 +239,13 @@ void setDimmer(float value) {
   Serial.print("dimmer duty: ");
   Serial.println(duty);
 
-  #if ESP_ARDUINO_VERSION_MAJOR >= 3
-    ledcWrite(ledPin, duty);
-    ledcWrite(dimmerPin, duty);
-  #else
-    ledcWrite(ledChannel, duty);
-    ledcWrite(dimmerChannel, duty);
-  #endif
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  ledcWrite(ledPin, duty);
+  ledcWrite(dimmerPin, duty);
+#else
+  ledcWrite(ledChannel, duty);
+  ledcWrite(dimmerChannel, duty);
+#endif
 }
 
 
@@ -278,11 +278,11 @@ void setup() {
   Serial.print("Driver version: ");
   Serial.println(driver.version());
   driver.toff(4);
-  driver.rms_current(1000); //800 set to your motor's rated current (mA)
+  driver.rms_current(1000);  //800 set to your motor's rated current (mA)
   driver.microsteps(8);
   driver.pwm_autoscale(true);
   driver.TCOOLTHRS(0xFFFFF);
-  driver.SGTHRS(80); // controlls sensitivity of the stallguard, the higher the more sensitive, initial value was 60
+  driver.SGTHRS(80);  // controlls sensitivity of the stallguard, the higher the more sensitive, initial value was 60
 
   // Calibrate BEFORE touching WiFi/OSC, so nothing can be received or processed during it
   calibrate();
