@@ -85,6 +85,16 @@ const float MIN_VELOCIDAD_SEC = 10.0f;   // fastest allowed transition
 const float MAX_VELOCIDAD_SEC = 100.0f;  // slowest allowed transition
 float lastVelocidadSec = 10.0;           // default move duration until /velocidad is received
 
+// ---------- Input mode ----------
+// false = WiFi/OSC control (default). true = local potentiometers, no WiFi/OSC at all.
+// Flip this and reflash to switch modes.
+const bool USE_ANALOG_INPUT = true;
+
+// ---------- Analog input (potentiometer) wiring ----------
+const int POT_SLIDER_PIN = 35;  // wiper -> GPIO34 (ADC1, input-only)
+const int POT_DIMMER_PIN = 34;  // wiper -> GPIO35 (ADC1, input-only)
+const float ADC_MAX = 4095.0f;
+const float POT_DEADBAND = 0.05f;  // fraction around center (0.5) treated as "stopped"
 
 // ---------- Easing ----------
 const float EASE_MIX = 0.5f;  // 1.0 = full cubic ease, 0.0 = pure linear (no easing)
@@ -248,7 +258,49 @@ void setDimmer(float value) {
 #endif
 }
 
+// ---------- Analog (potentiometer) control ----------
+// Dimmer pot: direct proportional, same as an OSC 0.0-1.0 value.
+void handleAnalogDimmer() {
+  int raw = analogRead(POT_DIMMER_PIN);
+  float norm = raw / ADC_MAX;
+  setDimmer(norm);
+}
 
+// Slider pot: center = stopped. Turning away from center drives the slider toward
+// that side, with distance from center setting speed. Speed is remapped onto the
+// same MIN_VELOCIDAD_SEC..MAX_VELOCIDAD_SEC range used for OSC moves, so max/min
+// speeds match what /velocidad already produces.
+void handleAnalogSlider() {
+  static unsigned long lastStepMicros = 0;
+
+  int raw = analogRead(POT_SLIDER_PIN);
+  float norm = raw / ADC_MAX;         // 0.0 - 1.0
+  float disp = (norm - 0.5f) * 2.0f;  // -1.0 .. 0 (center) .. 1.0
+
+  float mag = fabs(disp);
+  if (mag < POT_DEADBAND) return;  // centered: stay still
+
+  // remap magnitude from [deadband..1.0] to [0..1] so speed ramps smoothly from the deadband edge
+  float speedFrac = (mag - POT_DEADBAND) / (1.0f - POT_DEADBAND);
+  speedFrac = constrain(speedFrac, 0.0f, 1.0f);
+
+  // MIN_VELOCIDAD_SEC = time for a full-range move (fastest), MAX_VELOCIDAD_SEC = slowest.
+  // Further from center -> faster.
+  float durationSec = MAX_VELOCIDAD_SEC - speedFrac * (MAX_VELOCIDAD_SEC - MIN_VELOCIDAD_SEC);
+  float stepsPerSec = (float)maxSteps / durationSec;
+  unsigned long stepIntervalMicros = (unsigned long)(1000000.0f / stepsPerSec);
+
+  bool forward = disp > 0.0f;
+  if (forward && currentSteps >= maxSteps) return;
+  if (!forward && currentSteps <= minSteps) return;
+
+  unsigned long now = micros();
+  if (now - lastStepMicros >= stepIntervalMicros) {
+    stepOnce(forward);
+    currentSteps += forward ? 1 : -1;
+    lastStepMicros = now;
+  }
+}
 
 // ---------- Setup ----------
 void setup() {
@@ -287,24 +339,34 @@ void setup() {
   // Calibrate BEFORE touching WiFi/OSC, so nothing can be received or processed during it
   calibrate();
 
-  // Now connect WiFi and start listening
-  Serial.print("Connecting to WiFi");
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(300);
-    Serial.print(".");
-  }
-  Serial.println();
-  Serial.print("Connected. IP: ");
-  Serial.println(WiFi.localIP());
+  if (USE_ANALOG_INPUT) {
+    Serial.println("Analog input mode: skipping WiFi/OSC setup, using potentiometers.");
+  } else {
+    // Now connect WiFi and start listening
+    Serial.print("Connecting to WiFi");
+    WiFi.begin(WIFI_SSID, WIFI_PASS);
+    while (WiFi.status() != WL_CONNECTED) {
+      delay(300);
+      Serial.print(".");
+    }
+    Serial.println();
+    Serial.print("Connected. IP: ");
+    Serial.println(WiFi.localIP());
 
-  udp.begin(OSC_PORT);
-  Serial.print("Listening for OSC on port ");
-  Serial.println(OSC_PORT);
+    udp.begin(OSC_PORT);
+    Serial.print("Listening for OSC on port ");
+    Serial.println(OSC_PORT);
+  }
 }
 
 // ---------- Main loop ----------
 void loop() {
+  if (USE_ANALOG_INPUT) {
+    handleAnalogSlider();
+    handleAnalogDimmer();
+    return;
+  }
+
   // --- read incoming OSC ---
   int packetSize = udp.parsePacket();
   if (packetSize > 0) {
