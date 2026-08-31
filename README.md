@@ -20,3 +20,7 @@ Built-in (no install needed, bundled with the ESP32 core)
 - `WiFiUdp.h`
 - `HardwareSerial.h`
 
+
+# Slider by moekoe
+
+https://www.instructables.com/DIY-Motorized-Camera-Slider-From-Four-3D-Printed-P/
