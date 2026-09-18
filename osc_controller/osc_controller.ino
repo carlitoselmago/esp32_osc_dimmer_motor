@@ -95,6 +95,7 @@ const int POT_SLIDER_PIN = 35;  // wiper -> GPIO34 (ADC1, input-only)
 const int POT_DIMMER_PIN = 34;  // wiper -> GPIO35 (ADC1, input-only)
 const float ADC_MAX = 4095.0f;
 const float POT_DEADBAND = 0.05f;  // fraction around center (0.5) treated as "stopped"
+const float POT_SPEED_CURVE = 2.5f;  // >1 = speed ramps up more sharply away from center
 
 // ---------- Easing ----------
 const float EASE_MIX = 0.5f;  // 1.0 = full cubic ease, 0.0 = pure linear (no easing)
@@ -283,6 +284,7 @@ void handleAnalogSlider() {
   // remap magnitude from [deadband..1.0] to [0..1] so speed ramps smoothly from the deadband edge
   float speedFrac = (mag - POT_DEADBAND) / (1.0f - POT_DEADBAND);
   speedFrac = constrain(speedFrac, 0.0f, 1.0f);
+  speedFrac = pow(speedFrac, POT_SPEED_CURVE);  // >1 sharpens the ramp for a more dramatic speed change
 
   // MIN_VELOCIDAD_SEC = time for a full-range move (fastest), MAX_VELOCIDAD_SEC = slowest.
   // Further from center -> faster.
@@ -290,7 +292,7 @@ void handleAnalogSlider() {
   float stepsPerSec = (float)maxSteps / durationSec;
   unsigned long stepIntervalMicros = (unsigned long)(1000000.0f / stepsPerSec);
 
-  bool forward = disp > 0.0f;
+  bool forward = disp < 0.0f;
   if (forward && currentSteps >= maxSteps) return;
   if (!forward && currentSteps <= minSteps) return;
 
