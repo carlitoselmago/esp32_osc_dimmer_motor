@@ -149,11 +149,26 @@ void stepOnceSlow(bool forward) {
 
 bool stalledDebounced() {
   static int streak = 0;
-  if (digitalRead(DIAG_PIN) == HIGH) {
+  bool diagHigh = digitalRead(DIAG_PIN) == HIGH;
+  if (diagHigh) {
     streak++;
   } else {
     streak = 0;
   }
+
+#ifdef DEBUG_PRINT_SLIDER_POT
+  static unsigned long lastSgDebugMs = 0;
+  if (millis() - lastSgDebugMs >= 100) {
+    lastSgDebugMs = millis();
+    Serial.print("SG_RESULT: ");
+    Serial.print(driver.SG_RESULT());
+    Serial.print("  DIAG: ");
+    Serial.print(diagHigh);
+    Serial.print("  streak: ");
+    Serial.println(streak);
+  }
+#endif
+
   if (streak >= STALL_DEBOUNCE) {
     streak = 0;
     return true;
@@ -447,7 +462,7 @@ void setup() {
   driver.microsteps(8);
   driver.pwm_autoscale(true);
   driver.TCOOLTHRS(0xFFFFF);
-  driver.SGTHRS(60);  // controlls sensitivity of the stallguard, the higher the more sensitive, initial value was 60
+  driver.SGTHRS(100);  // controlls sensitivity of the stallguard, the higher the more sensitive, initial value was 60
 
   // Calibrate BEFORE touching WiFi/OSC, so nothing can be received or processed during it
   if (DEBUG_SKIP_CALIBRATION) {
