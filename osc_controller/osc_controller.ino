@@ -259,11 +259,14 @@ void setDimmer(float value) {
     norm = constrain(value, 0.0f, 255.0f) / 255.0f;
   }
 
+  // Continuous ramp: 0..DIM_OFF_THRESHOLD maps to 0..DIM_MIN (fades fully off, no jump),
+  // then DIM_OFF_THRESHOLD..1.0 maps to DIM_MIN..DIM_MAX as before.
   int duty;
   if (norm <= DIM_OFF_THRESHOLD) {
-    duty = 0;  // fully off, rather than floored at DIM_MIN
+    duty = (int)(norm / DIM_OFF_THRESHOLD * DIM_MIN);
   } else {
-    duty = DIM_MIN + (int)(norm * (DIM_MAX - DIM_MIN));
+    float upperNorm = (norm - DIM_OFF_THRESHOLD) / (1.0f - DIM_OFF_THRESHOLD);
+    duty = DIM_MIN + (int)(upperNorm * (DIM_MAX - DIM_MIN));
   }
   duty = constrain(duty, 0, 255);
 
@@ -283,7 +286,7 @@ void setDimmer(float value) {
 // Dimmer pot: direct proportional, same as an OSC 0.0-1.0 value.
 void handleAnalogDimmer() {
   int raw = analogRead(POT_DIMMER_PIN);
-  float norm = raw / ADC_MAX;
+  float norm = 1.0f - (raw / ADC_MAX);  // inverted: left = on, right = off
 
 #ifdef DEBUG_PRINT_SLIDER_POT
   static unsigned long lastDimmerDebugMs = 0;
