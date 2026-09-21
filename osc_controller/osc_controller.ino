@@ -51,7 +51,12 @@ const int ledcResolution = 8;    // 0-255
 
 const int DIM_MIN = 130;  // rough guess for where variation starts to matter — tune this
 const int DIM_MAX = 250;  // pulled back from the literal ceiling (255) since some bulbs glitch off/on right at max
-const float DIM_OFF_THRESHOLD = 0.03f;  // pot/OSC value at or below this forces the light fully off
+// Hysteresis around the off point: without a gap between the "turn off" and "turn back on"
+// thresholds, ADC noise right at the boundary flickers the output between 0 and DIM_MIN every loop.
+const float DIM_OFF_ENTER = 0.03f;  // turn off once norm drops to/below this
+const float DIM_OFF_EXIT = 0.07f;   // only turn back on once norm rises above this
+const int DIM_MAX_DUTY_STEP = 4;    // max duty change per update; keeps every transition a real pulse
+                                     // sequence instead of a single static jump the module can miss
 
 // ---------- WiFi / OSC ----------
 const char *WIFI_SSID = "MANGO";
@@ -259,17 +264,34 @@ void setDimmer(float value) {
     norm = constrain(value, 0.0f, 255.0f) / 255.0f;
   }
 
-  // Hard jump straight to 0 below the threshold: the module can't reliably fire at
-  // duty values between 0 and DIM_MIN (narrow trigger angles flicker), so we skip
-  // that range entirely instead of ramping through it.
-  int duty;
-  if (norm <= DIM_OFF_THRESHOLD) {
-    duty = 0;
+  // Hysteresis: stay off until norm rises past DIM_OFF_EXIT, stay on until it falls
+  // to/below DIM_OFF_ENTER. Prevents ADC noise at the boundary from toggling on/off rapidly.
+  static bool dimmerOff = true;
+  if (dimmerOff) {
+    if (norm > DIM_OFF_EXIT) dimmerOff = false;
   } else {
-    float upperNorm = (norm - DIM_OFF_THRESHOLD) / (1.0f - DIM_OFF_THRESHOLD);
-    duty = DIM_MIN + (int)(upperNorm * (DIM_MAX - DIM_MIN));
+    if (norm <= DIM_OFF_ENTER) dimmerOff = true;
   }
-  duty = constrain(duty, 0, 255);
+
+  int targetDuty;
+  if (dimmerOff) {
+    targetDuty = 0;
+  } else {
+    float upperNorm = (norm - DIM_OFF_ENTER) / (1.0f - DIM_OFF_ENTER);
+    upperNorm = constrain(upperNorm, 0.0f, 1.0f);
+    targetDuty = DIM_MIN + (int)(upperNorm * (DIM_MAX - DIM_MIN));
+  }
+  targetDuty = constrain(targetDuty, 0, DIM_MAX);
+
+  // Slew-limit: always step toward the target rather than jumping straight to it, so the
+  // module always sees a real pulse sequence rather than an instantaneous static change.
+  static float currentDuty = 0.0f;
+  if (targetDuty > currentDuty) {
+    currentDuty = min((float)targetDuty, currentDuty + DIM_MAX_DUTY_STEP);
+  } else if (targetDuty < currentDuty) {
+    currentDuty = max((float)targetDuty, currentDuty - DIM_MAX_DUTY_STEP);
+  }
+  int duty = constrain((int)(currentDuty + 0.5f), 0, 255);
 
   //Serial.print("dimmer duty: ");
   //Serial.println(duty);
