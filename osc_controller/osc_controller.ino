@@ -97,8 +97,8 @@ const bool USE_ANALOG_INPUT = true;
 const bool DEBUG_SKIP_CALIBRATION = true;
 
 // ---------- Analog input (potentiometer) wiring ----------
-const int POT_SLIDER_PIN = 35;  // wiper -> GPIO34 (ADC1, input-only)
-const int POT_DIMMER_PIN = 34;  // wiper -> GPIO35 (ADC1, input-only)
+const int POT_SLIDER_PIN = 35;  // 35 wiper -> GPIO34 (ADC1, input-only)
+const int POT_DIMMER_PIN = 34;  // 34 wiper -> GPIO35 (ADC1, input-only)
 const float ADC_MAX = 4095.0f;
 const float POT_DEADBAND = 0.05f;  // fraction around center (0.5) treated as "stopped"
 const float POT_SPEED_CURVE = 2.5f;  // >1 = speed ramps up more sharply away from center
@@ -253,8 +253,8 @@ void setDimmer(float value) {
   int duty = DIM_MIN + (int)(norm * (DIM_MAX - DIM_MIN));
   duty = constrain(duty, 0, 255);
 
-  Serial.print("dimmer duty: ");
-  Serial.println(duty);
+  //Serial.print("dimmer duty: ");
+  //Serial.println(duty);
 
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
   ledcWrite(ledPin, duty);
