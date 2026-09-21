@@ -329,7 +329,7 @@ void handleAnalogSlider() {
   float stepsPerSec = POT_MIN_STEPS_PER_SEC + speedFrac * (POT_MAX_STEPS_PER_SEC - POT_MIN_STEPS_PER_SEC);
   unsigned long stepIntervalMicros = (unsigned long)(1000000.0f / stepsPerSec);
 
-  bool forward = disp > 0.0f;
+  bool forward = disp < 0.0f;
   if (!DEBUG_SKIP_CALIBRATION) {
     if (forward && currentSteps >= maxSteps) return;
     if (!forward && currentSteps <= minSteps) return;
