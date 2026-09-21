@@ -108,6 +108,7 @@ const int POT_DIMMER_PIN = 34;  // 34 wiper -> GPIO35 (ADC1, input-only)
 const float ADC_MAX = 4095.0f;
 const float POT_DEADBAND = 0.05f;  // fraction around center (0.5) treated as "stopped"
 const float POT_SPEED_CURVE = 2.5f;  // >1 = speed ramps up more sharply away from center
+const float POT_MIN_VELOCIDAD_SEC = 4.0f;  // fastest allowed pot-driven move (lower = faster, more than 2x MIN_VELOCIDAD_SEC)
 
 // ---------- Easing ----------
 const float EASE_MIX = 0.5f;  // 1.0 = full cubic ease, 0.0 = pure linear (no easing)
@@ -314,11 +315,11 @@ void handleAnalogSlider() {
 
   // MIN_VELOCIDAD_SEC = time for a full-range move (fastest), MAX_VELOCIDAD_SEC = slowest.
   // Further from center -> faster.
-  float durationSec = MAX_VELOCIDAD_SEC - speedFrac * (MAX_VELOCIDAD_SEC - MIN_VELOCIDAD_SEC);
+  float durationSec = MAX_VELOCIDAD_SEC - speedFrac * (MAX_VELOCIDAD_SEC - POT_MIN_VELOCIDAD_SEC);
   float stepsPerSec = (float)maxSteps / durationSec;
   unsigned long stepIntervalMicros = (unsigned long)(1000000.0f / stepsPerSec);
 
-  bool forward = disp < 0.0f;
+  bool forward = disp > 0.0f;
   if (!DEBUG_SKIP_CALIBRATION) {
     if (forward && currentSteps >= maxSteps) return;
     if (!forward && currentSteps <= minSteps) return;
