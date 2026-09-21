@@ -108,8 +108,8 @@ const int POT_DIMMER_PIN = 34;  // 34 wiper -> GPIO35 (ADC1, input-only)
 const float ADC_MAX = 4095.0f;
 const float POT_DEADBAND = 0.15f;  // fraction around center (0.5) treated as "stopped"
 const float POT_SPEED_CURVE = 1.4f;  // >1 = speed ramps up more sharply away from center
-const float POT_MIN_VELOCIDAD_SEC = 4.0f;   // fastest allowed pot-driven move (lower = faster)
-const float POT_MAX_VELOCIDAD_SEC = 15.0f;  // slowest allowed pot-driven move (separate from OSC's MAX_VELOCIDAD_SEC, which is much slower)
+const float POT_MIN_STEPS_PER_SEC = 300.0f;   // slowest jog speed, just past the deadband
+const float POT_MAX_STEPS_PER_SEC = 6000.0f;  // fastest jog speed, at full pot deflection
 
 // ---------- Easing ----------
 const float EASE_MIX = 0.5f;  // 1.0 = full cubic ease, 0.0 = pure linear (no easing)
@@ -282,9 +282,8 @@ void handleAnalogDimmer() {
 }
 
 // Slider pot: center = stopped. Turning away from center drives the slider toward
-// that side, with distance from center setting speed. Speed is remapped onto the
-// same MIN_VELOCIDAD_SEC..MAX_VELOCIDAD_SEC range used for OSC moves, so max/min
-// speeds match what /velocidad already produces.
+// that side, with distance from center setting speed, directly in steps/sec
+// (POT_MIN_STEPS_PER_SEC..POT_MAX_STEPS_PER_SEC), independent of OSC's /velocidad range.
 void handleAnalogSlider() {
   static unsigned long lastStepMicros = 0;
 
@@ -314,10 +313,8 @@ void handleAnalogSlider() {
   speedFrac = constrain(speedFrac, 0.0f, 1.0f);
   speedFrac = pow(speedFrac, POT_SPEED_CURVE);  // >1 sharpens the ramp for a more dramatic speed change
 
-  // MIN_VELOCIDAD_SEC = time for a full-range move (fastest), MAX_VELOCIDAD_SEC = slowest.
-  // Further from center -> faster.
-  float durationSec = POT_MAX_VELOCIDAD_SEC - speedFrac * (POT_MAX_VELOCIDAD_SEC - POT_MIN_VELOCIDAD_SEC);
-  float stepsPerSec = (float)maxSteps / durationSec;
+  // Further from center -> faster, directly in steps/sec (independent of maxSteps/calibration).
+  float stepsPerSec = POT_MIN_STEPS_PER_SEC + speedFrac * (POT_MAX_STEPS_PER_SEC - POT_MIN_STEPS_PER_SEC);
   unsigned long stepIntervalMicros = (unsigned long)(1000000.0f / stepsPerSec);
 
   bool forward = disp > 0.0f;
