@@ -51,6 +51,7 @@ const int ledcResolution = 8;    // 0-255
 
 const int DIM_MIN = 130;  // rough guess for where variation starts to matter — tune this
 const int DIM_MAX = 255;  // already confirmed max
+const float DIM_OFF_THRESHOLD = 0.03f;  // pot/OSC value at or below this forces the light fully off
 
 // ---------- WiFi / OSC ----------
 const char *WIFI_SSID = "MANGO";
@@ -258,7 +259,12 @@ void setDimmer(float value) {
     norm = constrain(value, 0.0f, 255.0f) / 255.0f;
   }
 
-  int duty = DIM_MIN + (int)(norm * (DIM_MAX - DIM_MIN));
+  int duty;
+  if (norm <= DIM_OFF_THRESHOLD) {
+    duty = 0;  // fully off, rather than floored at DIM_MIN
+  } else {
+    duty = DIM_MIN + (int)(norm * (DIM_MAX - DIM_MIN));
+  }
   duty = constrain(duty, 0, 255);
 
   //Serial.print("dimmer duty: ");
