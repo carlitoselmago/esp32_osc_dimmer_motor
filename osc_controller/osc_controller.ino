@@ -109,7 +109,7 @@ const float ADC_MAX = 4095.0f;
 const float POT_DEADBAND = 0.15f;  // fraction around center (0.5) treated as "stopped"
 const float POT_SPEED_CURVE = 1.4f;  // >1 = speed ramps up more sharply away from center
 const float POT_MIN_STEPS_PER_SEC = 300.0f;   // slowest jog speed, just past the deadband
-const float POT_MAX_STEPS_PER_SEC = 6000.0f;  // fastest jog speed, at full pot deflection
+const float POT_MAX_STEPS_PER_SEC = 12000.0f;  // fastest jog speed, at full pot deflection
 
 // ---------- Easing ----------
 const float EASE_MIX = 0.5f;  // 1.0 = full cubic ease, 0.0 = pure linear (no easing)
@@ -400,7 +400,14 @@ void setup() {
 void loop() {
   if (USE_ANALOG_INPUT) {
     handleAnalogSlider();
-    handleAnalogDimmer();
+    // Dimmer doesn't need every-loop precision; throttling its analogRead keeps it
+    // from stealing loop cycles the slider needs to hit high step rates.
+    static unsigned long lastDimmerMs = 0;
+    unsigned long nowMs = millis();
+    if (nowMs - lastDimmerMs >= 20) {
+      lastDimmerMs = nowMs;
+      handleAnalogDimmer();
+    }
     return;
   }
 
