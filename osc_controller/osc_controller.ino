@@ -90,6 +90,12 @@ float lastVelocidadSec = 10.0;           // default move duration until /velocid
 // Flip this and reflash to switch modes.
 const bool USE_ANALOG_INPUT = true;
 
+// ---------- DEBUG ----------
+// TEMPORARY: when true, skips homing/calibration entirely (no StallGuard sensing)
+// and lets the analog pots drive the dimmer/slider right away, with no travel limits.
+// Set back to false before real use on the actual slider hardware.
+const bool DEBUG_SKIP_CALIBRATION = true;
+
 // ---------- Analog input (potentiometer) wiring ----------
 const int POT_SLIDER_PIN = 35;  // wiper -> GPIO34 (ADC1, input-only)
 const int POT_DIMMER_PIN = 34;  // wiper -> GPIO35 (ADC1, input-only)
@@ -293,8 +299,10 @@ void handleAnalogSlider() {
   unsigned long stepIntervalMicros = (unsigned long)(1000000.0f / stepsPerSec);
 
   bool forward = disp < 0.0f;
-  if (forward && currentSteps >= maxSteps) return;
-  if (!forward && currentSteps <= minSteps) return;
+  if (!DEBUG_SKIP_CALIBRATION) {
+    if (forward && currentSteps >= maxSteps) return;
+    if (!forward && currentSteps <= minSteps) return;
+  }
 
   unsigned long now = micros();
   if (now - lastStepMicros >= stepIntervalMicros) {
@@ -339,7 +347,12 @@ void setup() {
   driver.SGTHRS(60);  // controlls sensitivity of the stallguard, the higher the more sensitive, initial value was 60
 
   // Calibrate BEFORE touching WiFi/OSC, so nothing can be received or processed during it
-  calibrate();
+  if (DEBUG_SKIP_CALIBRATION) {
+    Serial.println("DEBUG_SKIP_CALIBRATION: skipping homing/calibration.");
+    calibrated = true;
+  } else {
+    calibrate();
+  }
 
   if (USE_ANALOG_INPUT) {
     Serial.println("Analog input mode: skipping WiFi/OSC setup, using potentiometers.");
