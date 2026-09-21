@@ -105,8 +105,12 @@ const bool DEBUG_SKIP_CALIBRATION = false;
 // math below needs a maxSteps to divide by (real calibration would set this from
 // the actual measured range). Tune if slider feels too fast/slow in debug mode.
 const long DEBUG_NOMINAL_MAX_STEPS = 4000;
-// Uncomment to print slider pot readings (raw/norm/disp/forward/step interval) ~4x/sec.
+// Uncomment to print slider pot readings (raw/norm/disp/forward/step interval) ~4x/sec,
+// and live SG_RESULT/DIAG/streak values during calibration.
 #define DEBUG_PRINT_SLIDER_POT
+// Uncomment to print dimmer pot readings and final duty. Separate from the flag above
+// so you can debug stallguard/calibration without the dimmer spamming the console.
+//#define DEBUG_PRINT_DIMMER_POT
 
 // ---------- Analog input (potentiometer) wiring ----------
 const int POT_SLIDER_PIN = 35;  // 35 wiper -> GPIO34 (ADC1, input-only)
@@ -308,7 +312,7 @@ void setDimmer(float value) {
   }
   int duty = constrain((int)(currentDuty + 0.5f), 0, 255);
 
-#ifdef DEBUG_PRINT_SLIDER_POT
+#ifdef DEBUG_PRINT_DIMMER_POT
   static unsigned long lastFinalDutyDebugMs = 0;
   if (millis() - lastFinalDutyDebugMs >= 250) {
     lastFinalDutyDebugMs = millis();
@@ -366,7 +370,7 @@ void handleAnalogDimmer() {
   int raw = analogRead(POT_DIMMER_PIN);
   float norm = 1.0f - (raw / ADC_MAX);  // inverted: left = on, right = off
 
-#ifdef DEBUG_PRINT_SLIDER_POT
+#ifdef DEBUG_PRINT_DIMMER_POT
   static unsigned long lastDimmerDebugMs = 0;
   if (millis() - lastDimmerDebugMs >= 250) {
     lastDimmerDebugMs = millis();
