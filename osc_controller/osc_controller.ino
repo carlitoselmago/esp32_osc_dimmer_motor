@@ -49,16 +49,8 @@ const int ledcFreq = 5000;
 const int dimmerLedcFreq = 200;  // dentro del rango 1-500Hz del YYAC-3S
 const int ledcResolution = 8;    // 0-255
 
-// Empirically tested against a GU10 dimmable LED bulb on this specific dimmer module:
-// duty 130..216 ramps cleanly from dim to bright; 217..~234 flickers (unstable trigger
-// zone); 235..240 is a separate stable band, but non-monotonic — it reads as a much
-// dimmer glow than 216 despite the higher duty. We treat that as a distinct "super dim"
-// notch at the bottom of the pot's travel instead of ever passing through the flicker zone.
-const int DIM_MIN = 130;           // bottom of the normal dim->bright ramp
-const int DIM_MAX = 216;           // top of the normal ramp — highest duty confirmed flicker-free
-const int DIM_SUPERDIM_MIN = 235;  // bottom of the super-dim notch
-const int DIM_SUPERDIM_MAX = 240;  // top of the super-dim notch
-const float DIM_SUPERDIM_FRACTION = 0.20f;  // fraction of post-off pot travel reserved for the super-dim notch
+const int DIM_MIN = 130;  // rough guess for where variation starts to matter — tune this
+const int DIM_MAX = 250;  // pulled back from the literal ceiling (255) since some bulbs glitch off/on right at max
 // Hysteresis around the off point: without a gap between the "turn off" and "turn back on"
 // thresholds, ADC noise right at the boundary flickers the output between 0 and DIM_MIN every loop.
 const float DIM_OFF_ENTER = 0.03f;  // turn off once norm drops to/below this
@@ -285,21 +277,11 @@ void setDimmer(float value) {
   if (dimmerOff) {
     targetDuty = 0;
   } else {
-    float workingNorm = (norm - DIM_OFF_ENTER) / (1.0f - DIM_OFF_ENTER);
-    workingNorm = constrain(workingNorm, 0.0f, 1.0f);
-
-    if (workingNorm < DIM_SUPERDIM_FRACTION) {
-      // Bottom slice of travel: the super-dim notch. Non-monotonic on purpose —
-      // this duty band is numerically higher than DIM_MAX but reads dimmer.
-      float superFrac = workingNorm / DIM_SUPERDIM_FRACTION;
-      targetDuty = DIM_SUPERDIM_MIN + (int)(superFrac * (DIM_SUPERDIM_MAX - DIM_SUPERDIM_MIN));
-    } else {
-      // Rest of travel: normal dim->bright ramp, staying below the flicker onset.
-      float mainFrac = (workingNorm - DIM_SUPERDIM_FRACTION) / (1.0f - DIM_SUPERDIM_FRACTION);
-      targetDuty = DIM_MIN + (int)(mainFrac * (DIM_MAX - DIM_MIN));
-    }
+    float upperNorm = (norm - DIM_OFF_ENTER) / (1.0f - DIM_OFF_ENTER);
+    upperNorm = constrain(upperNorm, 0.0f, 1.0f);
+    targetDuty = DIM_MIN + (int)(upperNorm * (DIM_MAX - DIM_MIN));
   }
-  targetDuty = constrain(targetDuty, 0, DIM_SUPERDIM_MAX);
+  targetDuty = constrain(targetDuty, 0, DIM_MAX);
 
   // Slew-limit: always step toward the target rather than jumping straight to it, so the
   // module always sees a real pulse sequence rather than an instantaneous static change.
