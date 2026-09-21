@@ -108,8 +108,8 @@ const int POT_DIMMER_PIN = 34;  // 34 wiper -> GPIO35 (ADC1, input-only)
 const float ADC_MAX = 4095.0f;
 const float POT_DEADBAND = 0.15f;  // fraction around center (0.5) treated as "stopped"
 const float POT_SPEED_CURVE = 1.4f;  // >1 = speed ramps up more sharply away from center
-const float POT_MIN_STEPS_PER_SEC = 300.0f;   // slowest jog speed, just past the deadband
-const float POT_MAX_STEPS_PER_SEC = 12000.0f;  // fastest jog speed, at full pot deflection
+const float POT_MIN_STEPS_PER_SEC = 150.0f;   // slowest jog speed, just past the deadband
+const float POT_MAX_STEPS_PER_SEC = 2000.0f;  // fastest jog speed, at full pot deflection
 
 // ---------- Easing ----------
 const float EASE_MIX = 0.5f;  // 1.0 = full cubic ease, 0.0 = pure linear (no easing)
@@ -278,6 +278,18 @@ void setDimmer(float value) {
 void handleAnalogDimmer() {
   int raw = analogRead(POT_DIMMER_PIN);
   float norm = raw / ADC_MAX;
+
+#ifdef DEBUG_PRINT_SLIDER_POT
+  static unsigned long lastDimmerDebugMs = 0;
+  if (millis() - lastDimmerDebugMs >= 250) {
+    lastDimmerDebugMs = millis();
+    Serial.print("dimmer raw: ");
+    Serial.print(raw);
+    Serial.print("  norm: ");
+    Serial.println(norm, 3);
+  }
+#endif
+
   setDimmer(norm);
 }
 
