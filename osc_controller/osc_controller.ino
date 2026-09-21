@@ -95,6 +95,12 @@ const bool USE_ANALOG_INPUT = true;
 // and lets the analog pots drive the dimmer/slider right away, with no travel limits.
 // Set back to false before real use on the actual slider hardware.
 const bool DEBUG_SKIP_CALIBRATION = true;
+// Placeholder travel range used only when calibration is skipped, since the speed
+// math below needs a maxSteps to divide by (real calibration would set this from
+// the actual measured range). Tune if slider feels too fast/slow in debug mode.
+const long DEBUG_NOMINAL_MAX_STEPS = 4000;
+// Uncomment to print slider pot readings (raw/norm/disp/forward/step interval) ~4x/sec.
+#define DEBUG_PRINT_SLIDER_POT
 
 // ---------- Analog input (potentiometer) wiring ----------
 const int POT_SLIDER_PIN = 35;  // 35 wiper -> GPIO34 (ADC1, input-only)
@@ -304,6 +310,23 @@ void handleAnalogSlider() {
     if (!forward && currentSteps <= minSteps) return;
   }
 
+#ifdef DEBUG_PRINT_SLIDER_POT
+  static unsigned long lastDebugPrintMs = 0;
+  if (millis() - lastDebugPrintMs >= 250) {
+    lastDebugPrintMs = millis();
+    Serial.print("raw: ");
+    Serial.print(raw);
+    Serial.print("  norm: ");
+    Serial.print(norm, 3);
+    Serial.print("  disp: ");
+    Serial.print(disp, 3);
+    Serial.print("  forward: ");
+    Serial.print(forward);
+    Serial.print("  stepIntervalUs: ");
+    Serial.println(stepIntervalMicros);
+  }
+#endif
+
   unsigned long now = micros();
   if (now - lastStepMicros >= stepIntervalMicros) {
     stepOnce(forward);
@@ -349,6 +372,9 @@ void setup() {
   // Calibrate BEFORE touching WiFi/OSC, so nothing can be received or processed during it
   if (DEBUG_SKIP_CALIBRATION) {
     Serial.println("DEBUG_SKIP_CALIBRATION: skipping homing/calibration.");
+    maxSteps = DEBUG_NOMINAL_MAX_STEPS;
+    minSteps = 0;
+    currentSteps = maxSteps / 2;
     calibrated = true;
   } else {
     calibrate();
