@@ -291,6 +291,20 @@ void handleAnalogSlider() {
   float disp = (norm - 0.5f) * 2.0f;  // -1.0 .. 0 (center) .. 1.0
 
   float mag = fabs(disp);
+
+#ifdef DEBUG_PRINT_SLIDER_POT
+  static unsigned long lastDebugPrintMs = 0;
+  if (millis() - lastDebugPrintMs >= 250) {
+    lastDebugPrintMs = millis();
+    Serial.print("raw: ");
+    Serial.print(raw);
+    Serial.print("  norm: ");
+    Serial.print(norm, 3);
+    Serial.print("  disp: ");
+    Serial.println(disp, 3);
+  }
+#endif
+
   if (mag < POT_DEADBAND) return;  // centered: stay still
 
   // remap magnitude from [deadband..1.0] to [0..1] so speed ramps smoothly from the deadband edge
@@ -309,23 +323,6 @@ void handleAnalogSlider() {
     if (forward && currentSteps >= maxSteps) return;
     if (!forward && currentSteps <= minSteps) return;
   }
-
-#ifdef DEBUG_PRINT_SLIDER_POT
-  static unsigned long lastDebugPrintMs = 0;
-  if (millis() - lastDebugPrintMs >= 250) {
-    lastDebugPrintMs = millis();
-    Serial.print("raw: ");
-    Serial.print(raw);
-    Serial.print("  norm: ");
-    Serial.print(norm, 3);
-    Serial.print("  disp: ");
-    Serial.print(disp, 3);
-    Serial.print("  forward: ");
-    Serial.print(forward);
-    Serial.print("  stepIntervalUs: ");
-    Serial.println(stepIntervalMicros);
-  }
-#endif
 
   unsigned long now = micros();
   if (now - lastStepMicros >= stepIntervalMicros) {
