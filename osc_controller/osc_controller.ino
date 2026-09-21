@@ -293,8 +293,14 @@ void setDimmer(float value) {
   }
   int duty = constrain((int)(currentDuty + 0.5f), 0, 255);
 
-  //Serial.print("dimmer duty: ");
-  //Serial.println(duty);
+#ifdef DEBUG_PRINT_SLIDER_POT
+  static unsigned long lastFinalDutyDebugMs = 0;
+  if (millis() - lastFinalDutyDebugMs >= 250) {
+    lastFinalDutyDebugMs = millis();
+    Serial.print("  -> final duty: ");
+    Serial.println(duty);
+  }
+#endif
 
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
   ledcWrite(ledPin, duty);
