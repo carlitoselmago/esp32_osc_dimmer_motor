@@ -349,7 +349,7 @@ void checkDimmerDebugSerial() {
 // Dimmer pot: direct proportional, same as an OSC 0.0-1.0 value.
 void handleAnalogDimmer() {
   int raw = analogRead(POT_DIMMER_PIN);
-  float norm = 1.0f - (raw / ADC_MAX);  // inverted: left = on, right = off
+  float norm = raw / ADC_MAX;  // pot minimum (raw=0) = off, pot maximum = brightest
 
 #ifdef DEBUG_PRINT_SLIDER_POT
   static unsigned long lastDimmerDebugMs = 0;
