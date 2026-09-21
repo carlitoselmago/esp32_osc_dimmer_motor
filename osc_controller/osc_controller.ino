@@ -100,7 +100,7 @@ const bool USE_ANALOG_INPUT = true;
 // TEMPORARY: when true, skips homing/calibration entirely (no StallGuard sensing)
 // and lets the analog pots drive the dimmer/slider right away, with no travel limits.
 // Set back to false before real use on the actual slider hardware.
-const bool DEBUG_SKIP_CALIBRATION = true;
+const bool DEBUG_SKIP_CALIBRATION = false;
 // Placeholder travel range used only when calibration is skipped, since the speed
 // math below needs a maxSteps to divide by (real calibration would set this from
 // the actual measured range). Tune if slider feels too fast/slow in debug mode.
