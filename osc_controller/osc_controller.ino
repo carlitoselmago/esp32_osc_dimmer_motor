@@ -50,7 +50,7 @@ const int dimmerLedcFreq = 200;  // dentro del rango 1-500Hz del YYAC-3S
 const int ledcResolution = 8;    // 0-255
 
 const int DIM_MIN = 130;  // rough guess for where variation starts to matter — tune this
-const int DIM_MAX = 255;  // already confirmed max
+const int DIM_MAX = 250;  // pulled back from the literal ceiling (255) since some bulbs glitch off/on right at max
 const float DIM_OFF_THRESHOLD = 0.03f;  // pot/OSC value at or below this forces the light fully off
 
 // ---------- WiFi / OSC ----------
@@ -259,11 +259,12 @@ void setDimmer(float value) {
     norm = constrain(value, 0.0f, 255.0f) / 255.0f;
   }
 
-  // Continuous ramp: 0..DIM_OFF_THRESHOLD maps to 0..DIM_MIN (fades fully off, no jump),
-  // then DIM_OFF_THRESHOLD..1.0 maps to DIM_MIN..DIM_MAX as before.
+  // Hard jump straight to 0 below the threshold: the module can't reliably fire at
+  // duty values between 0 and DIM_MIN (narrow trigger angles flicker), so we skip
+  // that range entirely instead of ramping through it.
   int duty;
   if (norm <= DIM_OFF_THRESHOLD) {
-    duty = (int)(norm / DIM_OFF_THRESHOLD * DIM_MIN);
+    duty = 0;
   } else {
     float upperNorm = (norm - DIM_OFF_THRESHOLD) / (1.0f - DIM_OFF_THRESHOLD);
     duty = DIM_MIN + (int)(upperNorm * (DIM_MAX - DIM_MIN));
