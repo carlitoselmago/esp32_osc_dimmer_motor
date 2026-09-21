@@ -305,6 +305,40 @@ void setDimmer(float value) {
 #endif
 }
 
+// ---------- Dimmer debug: manual duty override over Serial ----------
+// Type a number 0-255 + Enter in the Serial Monitor to hold that exact duty steady
+// (bypassing the pot and all hysteresis/slew logic), so you can characterize exactly
+// which duty values flicker vs. hold cleanly on the real hardware. Type "auto" or "pot"
+// to hand control back to the potentiometer.
+int dimmerDebugOverride = -1;  // -1 = no override, pot is in control
+
+void checkDimmerDebugSerial() {
+  if (!Serial.available()) return;
+  String line = Serial.readStringUntil('\n');
+  line.trim();
+  if (line.length() == 0) return;
+
+  if (line.equalsIgnoreCase("auto") || line.equalsIgnoreCase("pot")) {
+    dimmerDebugOverride = -1;
+    Serial.println("Dimmer override OFF: pot back in control.");
+    return;
+  }
+
+  int duty = line.toInt();
+  duty = constrain(duty, 0, 255);
+  dimmerDebugOverride = duty;
+  Serial.print("Dimmer override duty: ");
+  Serial.println(duty);
+
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  ledcWrite(ledPin, duty);
+  ledcWrite(dimmerPin, duty);
+#else
+  ledcWrite(ledChannel, duty);
+  ledcWrite(dimmerChannel, duty);
+#endif
+}
+
 // ---------- Analog (potentiometer) control ----------
 // Dimmer pot: direct proportional, same as an OSC 0.0-1.0 value.
 void handleAnalogDimmer() {
@@ -444,11 +478,12 @@ void setup() {
 void loop() {
   if (USE_ANALOG_INPUT) {
     handleAnalogSlider();
+    checkDimmerDebugSerial();
     // Dimmer doesn't need every-loop precision; throttling its analogRead keeps it
     // from stealing loop cycles the slider needs to hit high step rates.
     static unsigned long lastDimmerMs = 0;
     unsigned long nowMs = millis();
-    if (nowMs - lastDimmerMs >= 20) {
+    if (dimmerDebugOverride < 0 && nowMs - lastDimmerMs >= 20) {
       lastDimmerMs = nowMs;
       handleAnalogDimmer();
     }
