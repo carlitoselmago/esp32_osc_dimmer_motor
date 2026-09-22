@@ -466,7 +466,7 @@ void setup() {
   driver.microsteps(8);
   driver.pwm_autoscale(true);
   driver.TCOOLTHRS(0xFFFFF);
-  driver.SGTHRS(100);  // controlls sensitivity of the stallguard, the higher the more sensitive, initial value was 60
+  driver.SGTHRS(60);  // controlls sensitivity of the stallguard, the higher the more sensitive, initial value was 60
 
   // Calibrate BEFORE touching WiFi/OSC, so nothing can be received or processed during it
   if (DEBUG_SKIP_CALIBRATION) {
