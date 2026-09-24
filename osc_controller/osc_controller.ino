@@ -110,7 +110,7 @@ const long DEBUG_NOMINAL_MAX_STEPS = 4000;
 #define DEBUG_PRINT_SLIDER_POT
 // Uncomment to print dimmer pot readings and final duty. Separate from the flag above
 // so you can debug stallguard/calibration without the dimmer spamming the console.
-//#define DEBUG_PRINT_DIMMER_POT
+#define DEBUG_PRINT_DIMMER_POT
 
 // ---------- Analog input (potentiometer) wiring ----------
 const int POT_SLIDER_PIN = 35;  // 35 wiper -> GPIO34 (ADC1, input-only)
