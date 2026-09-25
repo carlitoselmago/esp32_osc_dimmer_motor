@@ -80,6 +80,7 @@ long minSteps = 0;
 long maxSteps = 0;
 long currentSteps = 0;
 bool calibrated = false;
+bool freeMode = false;  // true = no travel limits enforced (debug skip, or calibration timed out)
 
 bool moving = false;
 long moveStartPos = 0;
@@ -101,10 +102,16 @@ const bool USE_ANALOG_INPUT = true;
 // and lets the analog pots drive the dimmer/slider right away, with no travel limits.
 // Set back to false before real use on the actual slider hardware.
 const bool DEBUG_SKIP_CALIBRATION = false;
-// Placeholder travel range used only when calibration is skipped, since the speed
-// math below needs a maxSteps to divide by (real calibration would set this from
-// the actual measured range). Tune if slider feels too fast/slow in debug mode.
+// Placeholder travel range used when calibration is skipped OR aborts (see
+// CALIBRATION_TIMEOUT_STEPS below), since the speed math needs a maxSteps to divide
+// by even with no real measured range. Tune if slider feels too fast/slow in that mode.
 const long DEBUG_NOMINAL_MAX_STEPS = 4000;
+// Safety limit for each homing search direction: if a stall isn't detected within this
+// many steps, something is wrong (DIAG/UART not working, mechanical issue, etc) — rather
+// than grinding into the end stop forever, calibration aborts and falls back to free mode
+// (same as DEBUG_SKIP_CALIBRATION: no travel limits enforced). Set comfortably above the
+// real full-travel step count.
+const long CALIBRATION_TIMEOUT_STEPS = 20000;
 // Uncomment to print slider pot readings (raw/norm/disp/forward/step interval) ~4x/sec,
 // and live SG_RESULT/DIAG/streak values during calibration.
 #define DEBUG_PRINT_SLIDER_POT
@@ -120,6 +127,11 @@ const float POT_DEADBAND = 0.15f;  // fraction around center (0.5) treated as "s
 const float POT_SPEED_CURVE = 1.4f;  // >1 = speed ramps up more sharply away from center
 const float POT_MIN_STEPS_PER_SEC = 100.0f;   // slowest jog speed, just past the deadband
 const float POT_MAX_STEPS_PER_SEC = 1300.0f;  // fastest jog speed, at full pot deflection
+// Disconnected-pot detection (see handleAnalogSlider): EMA of |raw - prevRaw| above this
+// is treated as a floating/disconnected input. Tune up if a connected pot false-triggers
+// this during fast turns, or down if a disconnected pot isn't being caught reliably.
+const float POT_JITTER_THRESHOLD = 150.0f;
+const float POT_JITTER_EMA_ALPHA = 0.2f;
 
 // ---------- Easing ----------
 const float EASE_MIX = 0.5f;  // 1.0 = full cubic ease, 0.0 = pure linear (no easing)
@@ -181,10 +193,30 @@ bool stalledDebounced() {
 }
 
 // ---------- Calibration ----------
+// Falls back to free mode (no travel limits, same as DEBUG_SKIP_CALIBRATION) if a stall
+// isn't found within CALIBRATION_TIMEOUT_STEPS — protects against grinding forever into
+// an end stop if DIAG/UART stall detection isn't working for whatever reason.
+void enterFreeModeFallback(const char *reason) {
+  Serial.print("Calibration aborted: ");
+  Serial.println(reason);
+  Serial.println("Falling back to free mode (no travel limits).");
+  freeMode = true;
+  maxSteps = DEBUG_NOMINAL_MAX_STEPS;
+  minSteps = 0;
+  currentSteps = maxSteps / 2;
+  calibrated = true;
+}
+
 void calibrate() {
   Serial.println("Calibrating: searching for limit A...");
+  long searchedA = 0;
   while (!stalledDebounced()) {
     stepOnceSlow(false);  // toward limit A
+    searchedA++;
+    if (searchedA >= CALIBRATION_TIMEOUT_STEPS) {
+      enterFreeModeFallback("no stall found searching for limit A (check DIAG wiring/UART)");
+      return;
+    }
   }
   Serial.println("Limit A found, backing off...");
   for (int i = 0; i < BACKOFF_STEPS; i++) stepOnceSlow(true);
@@ -196,6 +228,10 @@ void calibrate() {
   while (!stalledDebounced()) {
     stepOnceSlow(true);  // toward limit B
     traveled++;
+    if (traveled >= CALIBRATION_TIMEOUT_STEPS) {
+      enterFreeModeFallback("no stall found searching for limit B (check DIAG wiring/UART)");
+      return;
+    }
   }
   Serial.println("Limit B found, backing off...");
   for (int i = 0; i < BACKOFF_STEPS; i++) stepOnceSlow(false);
@@ -391,6 +427,21 @@ void handleAnalogSlider() {
   static unsigned long lastStepMicros = 0;
 
   int raw = analogRead(POT_SLIDER_PIN);
+
+  // Disconnected-pot safety: GPIO35 (ADC1, input-only) has no internal pull resistor, so an
+  // unplugged pot floats and picks up noise -- readings jitter wildly between samples, unlike
+  // a real connected pot which barely moves sample-to-sample even while being turned. Track
+  // that jitter and refuse to move if it looks disconnected, rather than trusting noise as a
+  // real "pushed hard to one side" command.
+  static int prevRaw = -1;
+  static float jitterEma = 0.0f;
+  if (prevRaw >= 0) {
+    float delta = fabs((float)(raw - prevRaw));
+    jitterEma += POT_JITTER_EMA_ALPHA * (delta - jitterEma);
+  }
+  prevRaw = raw;
+  bool potDisconnected = jitterEma > POT_JITTER_THRESHOLD;
+
   float norm = raw / ADC_MAX;         // 0.0 - 1.0
   float disp = (norm - 0.5f) * 2.0f;  // -1.0 .. 0 (center) .. 1.0
 
@@ -409,6 +460,15 @@ void handleAnalogSlider() {
   }
 #endif
 
+  if (potDisconnected) {
+    static unsigned long lastDisconnectWarnMs = 0;
+    if (millis() - lastDisconnectWarnMs >= 1000) {
+      lastDisconnectWarnMs = millis();
+      Serial.println("Slider pot appears disconnected (noisy ADC reading) - ignoring input.");
+    }
+    return;
+  }
+
   if (mag < POT_DEADBAND) return;  // centered: stay still
 
   // remap magnitude from [deadband..1.0] to [0..1] so speed ramps smoothly from the deadband edge
@@ -421,7 +481,7 @@ void handleAnalogSlider() {
   unsigned long stepIntervalMicros = (unsigned long)(1000000.0f / stepsPerSec);
 
   bool forward = disp < 0.0f;
-  if (!DEBUG_SKIP_CALIBRATION) {
+  if (!freeMode) {
     if (forward && currentSteps >= maxSteps) return;
     if (!forward && currentSteps <= minSteps) return;
   }
@@ -471,6 +531,7 @@ void setup() {
   // Calibrate BEFORE touching WiFi/OSC, so nothing can be received or processed during it
   if (DEBUG_SKIP_CALIBRATION) {
     Serial.println("DEBUG_SKIP_CALIBRATION: skipping homing/calibration.");
+    freeMode = true;
     maxSteps = DEBUG_NOMINAL_MAX_STEPS;
     minSteps = 0;
     currentSteps = maxSteps / 2;
