@@ -92,6 +92,10 @@ const float MIN_VELOCIDAD_SEC = 10.0f;   // fastest allowed transition
 const float MAX_VELOCIDAD_SEC = 100.0f;  // slowest allowed transition
 float lastVelocidadSec = 10.0;           // default move duration until /velocidad is received
 
+// ---------- Input mode ----------
+// false = WiFi/OSC control (default). true = local potentiometers, no WiFi/OSC at all.
+// Flip this and reflash to switch modes.
+const bool USE_ANALOG_INPUT = true;
 
 // ---------- DEBUG ----------
 // TEMPORARY: when true, skips homing/calibration entirely (no StallGuard sensing)
@@ -123,13 +127,11 @@ const float POT_DEADBAND = 0.15f;  // fraction around center (0.5) treated as "s
 const float POT_SPEED_CURVE = 1.4f;  // >1 = speed ramps up more sharply away from center
 const float POT_MIN_STEPS_PER_SEC = 100.0f;   // slowest jog speed, just past the deadband
 const float POT_MAX_STEPS_PER_SEC = 1300.0f;  // fastest jog speed, at full pot deflection
-// Disconnected-pot safety: neither pot is trusted to drive anything until it's shown a real,
-// wide swing since boot - a "wakeup" gesture proving a person is actually there turning it.
-// A floating/disconnected pin can drift or jitter, but reliably sweeping across a big chunk
-// of the range is a much harder thing to produce by accident than momentary noise is. Once
-// a pot latches "confirmed" it stays that way for the rest of runtime - this is a startup
-// handshake, not a continuous connection monitor.
-const float POT_WAKEUP_RANGE_FRACTION = 0.30f;  // required observed swing, as a fraction of ADC_MAX
+// Disconnected-pot detection (see handleAnalogSlider): EMA of |raw - prevRaw| above this
+// is treated as a floating/disconnected input. Tune up if a connected pot false-triggers
+// this during fast turns, or down if a disconnected pot isn't being caught reliably.
+const float POT_JITTER_THRESHOLD = 150.0f;
+const float POT_JITTER_EMA_ALPHA = 0.2f;
 
 // ---------- Easing ----------
 const float EASE_MIX = 0.5f;  // 1.0 = full cubic ease, 0.0 = pure linear (no easing)
@@ -402,19 +404,6 @@ void checkDimmerDebugSerial() {
 // Dimmer pot: direct proportional, same as an OSC 0.0-1.0 value.
 void handleAnalogDimmer() {
   int raw = analogRead(POT_DIMMER_PIN);
-
-  // Disconnected-pot safety: won't drive the dimmer until this pot has shown a real, wide
-  // swing since boot (see POT_WAKEUP_RANGE_FRACTION above).
-  static int dimmerPotMinSeen = (int)ADC_MAX;
-  static int dimmerPotMaxSeen = 0;
-  static bool dimmerPotConfirmed = false;
-  dimmerPotMinSeen = min(dimmerPotMinSeen, raw);
-  dimmerPotMaxSeen = max(dimmerPotMaxSeen, raw);
-  if (!dimmerPotConfirmed && (dimmerPotMaxSeen - dimmerPotMinSeen) >= (int)(ADC_MAX * POT_WAKEUP_RANGE_FRACTION)) {
-    dimmerPotConfirmed = true;
-    Serial.println("Dimmer pot confirmed connected (wakeup swing detected).");
-  }
-
   float norm = 1.0f - (raw / ADC_MAX);  // inverted: left = on, right = off
 
 #ifdef DEBUG_PRINT_DIMMER_POT
@@ -428,16 +417,6 @@ void handleAnalogDimmer() {
   }
 #endif
 
-  if (!dimmerPotConfirmed) {
-    static unsigned long lastDimmerNotConfirmedWarnMs = 0;
-    if (millis() - lastDimmerNotConfirmedWarnMs >= 1000) {
-      lastDimmerNotConfirmedWarnMs = millis();
-      Serial.println("Dimmer pot not yet confirmed (waiting for wakeup swing) - forcing off.");
-    }
-    setDimmer(0.0f);
-    return;
-  }
-
   setDimmer(norm);
 }
 
@@ -449,17 +428,19 @@ void handleAnalogSlider() {
 
   int raw = analogRead(POT_SLIDER_PIN);
 
-  // Disconnected-pot safety: won't drive the motor until this pot has shown a real, wide
-  // swing since boot (see POT_WAKEUP_RANGE_FRACTION above).
-  static int sliderPotMinSeen = (int)ADC_MAX;
-  static int sliderPotMaxSeen = 0;
-  static bool sliderPotConfirmed = false;
-  sliderPotMinSeen = min(sliderPotMinSeen, raw);
-  sliderPotMaxSeen = max(sliderPotMaxSeen, raw);
-  if (!sliderPotConfirmed && (sliderPotMaxSeen - sliderPotMinSeen) >= (int)(ADC_MAX * POT_WAKEUP_RANGE_FRACTION)) {
-    sliderPotConfirmed = true;
-    Serial.println("Slider pot confirmed connected (wakeup swing detected).");
+  // Disconnected-pot safety: GPIO35 (ADC1, input-only) has no internal pull resistor, so an
+  // unplugged pot floats and picks up noise -- readings jitter wildly between samples, unlike
+  // a real connected pot which barely moves sample-to-sample even while being turned. Track
+  // that jitter and refuse to move if it looks disconnected, rather than trusting noise as a
+  // real "pushed hard to one side" command.
+  static int prevRaw = -1;
+  static float jitterEma = 0.0f;
+  if (prevRaw >= 0) {
+    float delta = fabs((float)(raw - prevRaw));
+    jitterEma += POT_JITTER_EMA_ALPHA * (delta - jitterEma);
   }
+  prevRaw = raw;
+  bool potDisconnected = jitterEma > POT_JITTER_THRESHOLD;
 
   float norm = raw / ADC_MAX;         // 0.0 - 1.0
   float disp = (norm - 0.5f) * 2.0f;  // -1.0 .. 0 (center) .. 1.0
@@ -479,11 +460,11 @@ void handleAnalogSlider() {
   }
 #endif
 
-  if (!sliderPotConfirmed) {
-    static unsigned long lastNotConfirmedWarnMs = 0;
-    if (millis() - lastNotConfirmedWarnMs >= 1000) {
-      lastNotConfirmedWarnMs = millis();
-      Serial.println("Slider pot not yet confirmed (waiting for wakeup swing) - ignoring input.");
+  if (potDisconnected) {
+    static unsigned long lastDisconnectWarnMs = 0;
+    if (millis() - lastDisconnectWarnMs >= 1000) {
+      lastDisconnectWarnMs = millis();
+      Serial.println("Slider pot appears disconnected (noisy ADC reading) - ignoring input.");
     }
     return;
   }
@@ -559,41 +540,40 @@ void setup() {
     calibrate();
   }
 
-  // Both control paths run together now: the analog pots stay inert until each one's
-  // wakeup-swing safety latches (see POT_WAKEUP_RANGE_FRACTION), so it's safe to also
-  // always bring up WiFi/OSC - an OSC-only deployment with no pots wired up just never
-  // sees the pots do anything.
-  Serial.print("Connecting to WiFi");
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(300);
-    Serial.print(".");
-  }
-  Serial.println();
-  Serial.print("Connected. IP: ");
-  Serial.println(WiFi.localIP());
+  if (USE_ANALOG_INPUT) {
+    Serial.println("Analog input mode: skipping WiFi/OSC setup, using potentiometers.");
+  } else {
+    // Now connect WiFi and start listening
+    Serial.print("Connecting to WiFi");
+    WiFi.begin(WIFI_SSID, WIFI_PASS);
+    while (WiFi.status() != WL_CONNECTED) {
+      delay(300);
+      Serial.print(".");
+    }
+    Serial.println();
+    Serial.print("Connected. IP: ");
+    Serial.println(WiFi.localIP());
 
-  udp.begin(OSC_PORT);
-  Serial.print("Listening for OSC on port ");
-  Serial.println(OSC_PORT);
+    udp.begin(OSC_PORT);
+    Serial.print("Listening for OSC on port ");
+    Serial.println(OSC_PORT);
+  }
 }
 
 // ---------- Main loop ----------
-// Analog pots and OSC both run every cycle. The pots stay inert until their wakeup-swing
-// latches (see handleAnalogSlider/handleAnalogDimmer), so with nothing physically wired up
-// this behaves exactly like an OSC-only deployment. If a pot IS wired up and confirmed while
-// an OSC move is also in progress, whichever one issues the next step "wins" that step -
-// there's no arbitration between the two live control sources beyond that.
 void loop() {
-  handleAnalogSlider();
-  checkDimmerDebugSerial();
-  // Dimmer doesn't need every-loop precision; throttling its analogRead keeps it
-  // from stealing loop cycles the slider needs to hit high step rates.
-  static unsigned long lastDimmerMs = 0;
-  unsigned long nowMs = millis();
-  if (dimmerDebugOverride < 0 && nowMs - lastDimmerMs >= 20) {
-    lastDimmerMs = nowMs;
-    handleAnalogDimmer();
+  if (USE_ANALOG_INPUT) {
+    handleAnalogSlider();
+    checkDimmerDebugSerial();
+    // Dimmer doesn't need every-loop precision; throttling its analogRead keeps it
+    // from stealing loop cycles the slider needs to hit high step rates.
+    static unsigned long lastDimmerMs = 0;
+    unsigned long nowMs = millis();
+    if (dimmerDebugOverride < 0 && nowMs - lastDimmerMs >= 20) {
+      lastDimmerMs = nowMs;
+      handleAnalogDimmer();
+    }
+    return;
   }
 
   // --- read incoming OSC ---
