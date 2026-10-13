@@ -41,22 +41,47 @@ HardwareSerial driverSerial(1);
 TMC2209Stepper driver(&driverSerial, R_SENSE, DRIVER_ADDRESS);
 
 // ---------- Dimmer output ----------
-const int ledPin = 2;      // onboard LED, debug/visual feedback
-const int dimmerPin = 15;  // D15 -> DEWIN PWM dimmer module
-const int ledChannel = 0;
-const int dimmerChannel = 1;
-const int ledcFreq = 5000;
-const int dimmerLedcFreq = 200;  // dentro del rango 1-500Hz del YYAC-3S
-const int ledcResolution = 8;    // 0-255
+// Krida trailing-edge MOSFET AC LED dimmer. The module reports every mains zero-cross; we
+// raise the gate right after it and drop it again after a set on-time (longer = brighter).
+// Same pins and DIM_* constants as krida_dimmer_test - validate the module/bulb there and
+// copy the tuned values back here.
+// Wiring: module ZC -> D4, module GATE -> D18. ESP32 pins are 3.3V only, so check the
+// module's supply voltage / ZC output level before connecting.
+const int ZC_PIN = 4;     // zero-cross detection input (falls at the crossing)
+const int GATE_PIN = 18;  // MOSFET gate drive, HIGH = conducting
 
-const int DIM_MIN = 130;  // rough guess for where variation starts to matter — tune this
-const int DIM_MAX = 250;  // pulled back from the literal ceiling (255) since some bulbs glitch off/on right at max
+const int ledPin = 2;      // onboard LED, mirrors the dimmer level for visual feedback
+const int ledChannel = 0;
+const int ledcFreq = 5000;
+const int ledcResolution = 8;  // 0-255
+
+// Usable range clamp, in percent of the half-cycle the gate is held HIGH. Starting guesses,
+// not measured values - tune per bulb. At/below DIM_MIN_PERCENT the output is forced fully
+// off rather than interpolated.
+const int DIM_MIN_PERCENT = 5;
+const int DIM_MAX_PERCENT = 100;
 // Hysteresis around the off point: without a gap between the "turn off" and "turn back on"
-// thresholds, ADC noise right at the boundary flickers the output between 0 and DIM_MIN every loop.
-const float DIM_OFF_ENTER = 0.03f;  // turn off once norm drops to/below this
-const float DIM_OFF_EXIT = 0.07f;   // only turn back on once norm rises above this
-const int DIM_MAX_DUTY_STEP = 4;    // max duty change per update; keeps every transition a real pulse
-                                     // sequence instead of a single static jump the module can miss
+// thresholds, ADC noise right at the boundary flickers the output between off and a sliver
+// of on-time every loop.
+const int DIM_OFF_ENTER_PERCENT = DIM_MIN_PERCENT;     // go off once at/below this
+const int DIM_OFF_EXIT_PERCENT = DIM_MIN_PERCENT + 4;  // only turn back on once above this
+
+// Mains timing
+const float MAINS_FREQ_HZ = 50.0f;  // set to 60.0f if your mains is 60Hz
+const unsigned long HALF_CYCLE_US = (unsigned long)(1000000.0f / MAINS_FREQ_HZ / 2.0f);
+// The detector's edge doesn't land exactly on the true crossing, so wait this long after it
+// before raising the gate (the manufacturer's demo does the same).
+const unsigned long ZC_OFFSET_US = 100;
+const unsigned long ZC_DEBOUNCE_US = 5000;  // reject edges closer together than this (noise, not real crossings)
+// No zero-cross for 3 half-cycles -> signal lost: force the gate off, so a full-power level
+// can't leave the output latched on without a mains reference.
+const unsigned long ZC_LOST_MS = (HALF_CYCLE_US * 3) / 1000 + 1;
+
+// Touched by the ISRs below
+volatile unsigned long zeroCrossMicros = 0;
+volatile bool zeroCrossFlag = false;
+volatile unsigned long gateOnTimeUs = 0;  // how long the gate stays HIGH each half-cycle; 0 = off
+hw_timer_t *gateTimer = nullptr;
 
 // ---------- WiFi / OSC ----------
 const char *WIFI_SSID = "MANGO";
@@ -115,8 +140,9 @@ const long CALIBRATION_TIMEOUT_STEPS = 20000;
 // Uncomment to print slider pot readings (raw/norm/disp/forward/step interval) ~4x/sec,
 // and live SG_RESULT/DIAG/streak values during calibration.
 #define DEBUG_PRINT_SLIDER_POT
-// Uncomment to print dimmer pot readings and final duty. Separate from the flag above
-// so you can debug stallguard/calibration without the dimmer spamming the console.
+// Uncomment to print dimmer pot readings, final gate on-time and the measured mains
+// half-cycle. Separate from the flag above so you can debug stallguard/calibration
+// without the dimmer spamming the console.
 #define DEBUG_PRINT_DIMMER_POT
 
 // ---------- Analog input (potentiometer) wiring ----------
@@ -252,6 +278,123 @@ void calibrate() {
   Serial.println("Centered. Ready for OSC.");
 }
 
+// ---------- Dimmer (Krida trailing-edge MOSFET) ----------
+// Schedule the gate to drop `us` microseconds from now. One-shot, re-armed every half-cycle.
+void IRAM_ATTR armGateOffTimer(unsigned long us) {
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  timerRestart(gateTimer);
+  timerAlarm(gateTimer, us, false, 0);
+#else
+  timerWrite(gateTimer, 0);
+  timerAlarmWrite(gateTimer, us, false);
+  timerAlarmEnable(gateTimer);
+#endif
+}
+
+void IRAM_ATTR onGateOff() {
+  digitalWrite(GATE_PIN, LOW);
+}
+
+void IRAM_ATTR onZeroCross() {
+  unsigned long now = micros();
+  if (now - zeroCrossMicros < ZC_DEBOUNCE_US) return;
+  zeroCrossMicros = now;
+  zeroCrossFlag = true;
+
+  unsigned long onUs = gateOnTimeUs;
+  if (onUs == 0) {
+    digitalWrite(GATE_PIN, LOW);
+    return;
+  }
+  delayMicroseconds(ZC_OFFSET_US);
+  digitalWrite(GATE_PIN, HIGH);
+  // Full power: leave the gate HIGH, no timer. Dropping it at the very end of the half-cycle
+  // would only race the next zero-cross for a few microseconds of nothing.
+  if (onUs >= HALF_CYCLE_US) return;
+  armGateOffTimer(onUs);
+}
+
+// Raw, unclamped mapping - ignores DIM_MIN_PERCENT/DIM_MAX_PERCENT. 100% = the whole
+// half-cycle, which is the manufacturer's (level * FREQ) / 255 with level = 255.
+unsigned long computeRawOnTimeUs(float percent) {
+  percent = constrain(percent, 0.0f, 100.0f);
+  return (unsigned long)((percent / 100.0f) * HALF_CYCLE_US);
+}
+
+// Hysteresis: stay off until percent rises past DIM_OFF_EXIT_PERCENT, stay on until it
+// falls to/below DIM_OFF_ENTER_PERCENT. Prevents ADC noise at the boundary from toggling
+// on/off rapidly. While on, percent is held inside DIM_MIN_PERCENT..DIM_MAX_PERCENT.
+unsigned long computeOnTimeUs(float percent) {
+  static bool dimmerOff = true;
+  if (dimmerOff) {
+    if (percent > DIM_OFF_EXIT_PERCENT) dimmerOff = false;
+  } else {
+    if (percent <= DIM_OFF_ENTER_PERCENT) dimmerOff = true;
+  }
+  if (dimmerOff) return 0;
+
+  return computeRawOnTimeUs(constrain(percent, (float)DIM_MIN_PERCENT, (float)DIM_MAX_PERCENT));
+}
+
+// Single place that changes the dimmer output: hands the on-time to the ISR (takes effect
+// from the next zero-cross) and mirrors the level on the onboard LED.
+void applyDimmerOnTime(unsigned long onUs) {
+  gateOnTimeUs = onUs;
+  int ledDuty = constrain((int)((onUs * 255UL) / HALF_CYCLE_US), 0, 255);
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  ledcWrite(ledPin, ledDuty);
+#else
+  ledcWrite(ledChannel, ledDuty);
+#endif
+}
+
+// Call every loop(). Keeps the gate off while the zero-cross signal is missing (the ISR
+// can't drop a gate it was never called to drop) and reports it once per change, so a bench
+// run without mains doesn't spam the console.
+void serviceZeroCross() {
+  // 32-bit reads are atomic; a flag lost to the ISR race only skews the diagnostic below.
+  bool crossed = zeroCrossFlag;
+  zeroCrossFlag = false;
+
+  static bool seenCross = false;
+  static unsigned long lastCrossMs = 0;
+  if (crossed) {
+    seenCross = true;
+    lastCrossMs = millis();
+  }
+
+  static bool lostReported = false;
+  bool lost = !seenCross || (millis() - lastCrossMs > ZC_LOST_MS);
+  if (lost) {
+    digitalWrite(GATE_PIN, LOW);
+    if (!lostReported) {
+      lostReported = true;
+      Serial.println("No zero-cross detected - dimmer gate held off (check ZC wiring / mains / module supply).");
+    }
+  } else if (lostReported) {
+    lostReported = false;
+    Serial.println("Zero-cross detected - dimmer active.");
+  }
+
+#ifdef DEBUG_PRINT_DIMMER_POT
+  // Measured half-cycle every couple of seconds, to confirm ZC wiring and MAINS_FREQ_HZ.
+  static unsigned long lastCrossForPeriod = 0;
+  static unsigned long lastPeriodPrintMs = 0;
+  if (crossed) {
+    unsigned long zc = zeroCrossMicros;
+    if (lastCrossForPeriod != 0 && millis() - lastPeriodPrintMs >= 2000) {
+      lastPeriodPrintMs = millis();
+      Serial.print("Measured half-cycle: ");
+      Serial.print(zc - lastCrossForPeriod);
+      Serial.print(" us (expected ");
+      Serial.print(HALF_CYCLE_US);
+      Serial.println(" us)");
+    }
+    lastCrossForPeriod = zc;
+  }
+#endif
+}
+
 // ---------- OSC callbacks ----------
 void sliderCallback(OSCMessage &msg) {
   if (!calibrated) return;  // safety: ignore until calibration is done
@@ -319,58 +462,26 @@ void setDimmer(float value) {
     norm = constrain(value, 0.0f, 255.0f) / 255.0f;
   }
 
-  // Hysteresis: stay off until norm rises past DIM_OFF_EXIT, stay on until it falls
-  // to/below DIM_OFF_ENTER. Prevents ADC noise at the boundary from toggling on/off rapidly.
-  static bool dimmerOff = true;
-  if (dimmerOff) {
-    if (norm > DIM_OFF_EXIT) dimmerOff = false;
-  } else {
-    if (norm <= DIM_OFF_ENTER) dimmerOff = true;
-  }
-
-  int targetDuty;
-  if (dimmerOff) {
-    targetDuty = 0;
-  } else {
-    float upperNorm = (norm - DIM_OFF_ENTER) / (1.0f - DIM_OFF_ENTER);
-    upperNorm = constrain(upperNorm, 0.0f, 1.0f);
-    targetDuty = DIM_MIN + (int)(upperNorm * (DIM_MAX - DIM_MIN));
-  }
-  targetDuty = constrain(targetDuty, 0, DIM_MAX);
-
-  // Slew-limit: always step toward the target rather than jumping straight to it, so the
-  // module always sees a real pulse sequence rather than an instantaneous static change.
-  static float currentDuty = 0.0f;
-  if (targetDuty > currentDuty) {
-    currentDuty = min((float)targetDuty, currentDuty + DIM_MAX_DUTY_STEP);
-  } else if (targetDuty < currentDuty) {
-    currentDuty = max((float)targetDuty, currentDuty - DIM_MAX_DUTY_STEP);
-  }
-  int duty = constrain((int)(currentDuty + 0.5f), 0, 255);
+  // Raw ADC/OSC values keep full float resolution all the way to the on-time; no stepping
+  // to whole percents and no slew limit (a held-high gate has no pulse train to protect).
+  unsigned long onUs = computeOnTimeUs(norm * 100.0f);
+  applyDimmerOnTime(onUs);
 
 #ifdef DEBUG_PRINT_DIMMER_POT
   static unsigned long lastFinalDutyDebugMs = 0;
   if (millis() - lastFinalDutyDebugMs >= 250) {
     lastFinalDutyDebugMs = millis();
-    Serial.print("  -> final duty: ");
-    Serial.println(duty);
+    Serial.print("  -> gate on-time (us): ");
+    Serial.println(onUs);
   }
-#endif
-
-#if ESP_ARDUINO_VERSION_MAJOR >= 3
-  ledcWrite(ledPin, duty);
-  ledcWrite(dimmerPin, duty);
-#else
-  ledcWrite(ledChannel, duty);
-  ledcWrite(dimmerChannel, duty);
 #endif
 }
 
-// ---------- Dimmer debug: manual duty override over Serial ----------
-// Type a number 0-255 + Enter in the Serial Monitor to hold that exact duty steady
-// (bypassing the pot and all hysteresis/slew logic), so you can characterize exactly
-// which duty values flicker vs. hold cleanly on the real hardware. Type "auto" or "pot"
-// to hand control back to the potentiometer.
+// ---------- Dimmer debug: manual level override over Serial ----------
+// Type a number 0-100 + Enter in the Serial Monitor to hold that exact level steady
+// (bypassing the pot and the DIM_MIN_PERCENT/DIM_MAX_PERCENT clamp + hysteresis, same as
+// krida_dimmer_test), so you can characterize exactly which levels flicker vs. hold cleanly
+// on the real hardware. Type "auto" or "pot" to hand control back to the potentiometer.
 int dimmerDebugOverride = -1;  // -1 = no override, pot is in control
 
 void checkDimmerDebugSerial() {
@@ -385,19 +496,13 @@ void checkDimmerDebugSerial() {
     return;
   }
 
-  int duty = line.toInt();
-  duty = constrain(duty, 0, 255);
-  dimmerDebugOverride = duty;
-  Serial.print("Dimmer override duty: ");
-  Serial.println(duty);
+  int percent = constrain(line.toInt(), 0, 100);
+  dimmerDebugOverride = percent;
+  Serial.print("Dimmer override ON - holding RAW (unclamped) level: ");
+  Serial.print(percent);
+  Serial.println("%");
 
-#if ESP_ARDUINO_VERSION_MAJOR >= 3
-  ledcWrite(ledPin, duty);
-  ledcWrite(dimmerPin, duty);
-#else
-  ledcWrite(ledChannel, duty);
-  ledcWrite(dimmerChannel, duty);
-#endif
+  applyDimmerOnTime(computeRawOnTimeUs((float)percent));
 }
 
 // ---------- Analog (potentiometer) control ----------
@@ -503,13 +608,24 @@ void setup() {
 
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
   ledcAttach(ledPin, ledcFreq, ledcResolution);
-  ledcAttach(dimmerPin, dimmerLedcFreq, ledcResolution);
 #else
   ledcSetup(ledChannel, ledcFreq, ledcResolution);
   ledcAttachPin(ledPin, ledChannel);
-  ledcSetup(dimmerChannel, dimmerLedcFreq, ledcResolution);
-  ledcAttachPin(dimmerPin, dimmerChannel);
 #endif
+
+  // Dimmer starts off (gateOnTimeUs = 0): the ISR keeps the gate LOW until a level is set
+  pinMode(ZC_PIN, INPUT);
+  pinMode(GATE_PIN, OUTPUT);
+  digitalWrite(GATE_PIN, LOW);
+
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  gateTimer = timerBegin(1000000);                // 1 MHz tick -> 1 count = 1 us
+  timerAttachInterrupt(gateTimer, &onGateOff);
+#else
+  gateTimer = timerBegin(0, 80, true);            // 80 MHz / 80 = 1 MHz, counting up
+  timerAttachInterrupt(gateTimer, &onGateOff, true);
+#endif
+  attachInterrupt(digitalPinToInterrupt(ZC_PIN), onZeroCross, FALLING);
 
   pinMode(EN_PIN, OUTPUT);
   pinMode(DIR_PIN, OUTPUT);
@@ -562,6 +678,8 @@ void setup() {
 
 // ---------- Main loop ----------
 void loop() {
+  serviceZeroCross();
+
   if (USE_ANALOG_INPUT) {
     handleAnalogSlider();
     checkDimmerDebugSerial();
