@@ -139,11 +139,11 @@ const long DEBUG_NOMINAL_MAX_STEPS = 4000;
 const long CALIBRATION_TIMEOUT_STEPS = 20000;
 // Uncomment to print slider pot readings (raw/norm/disp/forward/step interval) ~4x/sec,
 // and live SG_RESULT/DIAG/streak values during calibration.
-#define DEBUG_PRINT_SLIDER_POT
+//#define DEBUG_PRINT_SLIDER_POT
 // Uncomment to print dimmer pot readings, final gate on-time and the measured mains
 // half-cycle. Separate from the flag above so you can debug stallguard/calibration
 // without the dimmer spamming the console.
-#define DEBUG_PRINT_DIMMER_POT
+//#define DEBUG_PRINT_DIMMER_POT
 
 // ---------- Analog input (potentiometer) wiring ----------
 const int POT_SLIDER_PIN = 35;  // 35 wiper -> GPIO34 (ADC1, input-only)
@@ -509,7 +509,7 @@ void checkDimmerDebugSerial() {
 // Dimmer pot: direct proportional, same as an OSC 0.0-1.0 value.
 void handleAnalogDimmer() {
   int raw = analogRead(POT_DIMMER_PIN);
-  float norm = 1.0f - (raw / ADC_MAX);  // inverted: left = on, right = off
+  float norm = 1.0f - constrain(raw / ADC_MAX, 0.0f, 1.0f);  // inverted: pot at 0 = full on, pot at max = off
 
 #ifdef DEBUG_PRINT_DIMMER_POT
   static unsigned long lastDimmerDebugMs = 0;

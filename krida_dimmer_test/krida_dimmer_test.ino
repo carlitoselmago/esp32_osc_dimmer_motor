@@ -25,7 +25,7 @@ const int ZC_PIN = 4; // Zero cross pin
 const int GATE_PIN = 18;
 
 //potentiometer
-const int POT_PIN = 15;
+const int POT_PIN = 34;
 
 const float ADC_MAX = 4095.0f;
 
